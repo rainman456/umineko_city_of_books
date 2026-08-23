@@ -80,9 +80,9 @@ describe("WebPushToggle when the site and browser both support web push", () => 
         });
     });
 
-    it("explains the failure and stays off when the browser blocks notifications", async () => {
+    it("surfaces the underlying reason and stays off when enabling fails", async () => {
         // given
-        webPush.enableWebPush.mockRejectedValue(new Error("notification permission was not granted"));
+        webPush.enableWebPush.mockRejectedValue(new Error("messaging/unsupported-browser"));
         const user = userEvent.setup();
         renderToggle();
 
@@ -90,7 +90,7 @@ describe("WebPushToggle when the site and browser both support web push", () => 
         await user.click(screen.getByRole("switch", { name: "Push Notifications" }));
 
         // then
-        expect(await screen.findByText(/Your browser may have blocked them/)).toBeInTheDocument();
+        expect(await screen.findByText(/messaging\/unsupported-browser/)).toBeInTheDocument();
         expect(screen.getByRole("switch", { name: "Push Notifications" })).toHaveAttribute("aria-checked", "false");
     });
 });

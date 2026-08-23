@@ -2,6 +2,7 @@ import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../test-utils/render";
+import { clearInstallPrompt, watchInstallPrompt } from "../../utils/installPrompt";
 import { InstallPrompt } from "./InstallPrompt";
 
 const { capacitor } = vi.hoisted(() => ({ capacitor: { isNativePlatform: vi.fn() } }));
@@ -45,6 +46,8 @@ function fireInstallPrompt(prompt: () => Promise<void>) {
 }
 
 beforeEach(() => {
+    watchInstallPrompt();
+    clearInstallPrompt();
     capacitor.isNativePlatform.mockReturnValue(false);
     setUserAgent(CHROME_UA);
     setStandalone(false);
@@ -167,5 +170,18 @@ describe("InstallPrompt where installing is not on offer", () => {
 
         // then
         expect(screen.queryByRole("region", { name: "Install City of Books" })).toBeNull();
+    });
+});
+
+describe("InstallPrompt when the browser fired beforeinstallprompt before React mounted", () => {
+    it("still offers the install, because the event is captured at startup", () => {
+        // given
+        fireInstallPrompt(() => Promise.resolve());
+
+        // when
+        renderWithProviders(<InstallPrompt />);
+
+        // then
+        expect(screen.getByRole("button", { name: "Install" })).toBeInTheDocument();
     });
 });

@@ -13,6 +13,9 @@ import { loadAuthToken } from "./utils/authToken";
 import { initAppUpdates } from "./utils/appUpdate";
 import "./styles/variables.css";
 import "./styles/global.css";
+import { watchInstallPrompt } from "./utils/installPrompt";
+
+watchInstallPrompt();
 
 function renderApp() {
     createRoot(document.getElementById("root")!).render(

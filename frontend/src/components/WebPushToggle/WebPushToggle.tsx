@@ -30,13 +30,13 @@ export function WebPushToggle() {
 
         action
             .then(() => setEnabled(next))
-            .catch(() =>
+            .catch((err: unknown) => {
+                const reason = err instanceof Error ? err.message : String(err);
+
                 setError(
-                    next
-                        ? "Could not turn notifications on. Your browser may have blocked them for this site."
-                        : "Could not turn notifications off.",
-                ),
-            )
+                    next ? `Could not turn notifications on: ${reason}` : `Could not turn notifications off: ${reason}`,
+                );
+            })
             .finally(() => setBusy(false));
     }
 

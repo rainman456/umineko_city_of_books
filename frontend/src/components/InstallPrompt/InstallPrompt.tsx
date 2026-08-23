@@ -1,14 +1,11 @@
 import { useEffect, useState } from "react";
 import { Capacitor } from "@capacitor/core";
+import { clearInstallPrompt, getInstallPrompt, subscribeInstallPrompt } from "../../utils/installPrompt";
 import styles from "./InstallPrompt.module.css";
 
 const DISMISSED_KEY = "dismissed_install_prompt";
 
 type PromptMode = "none" | "event" | "ios";
-
-interface BeforeInstallPromptEvent extends Event {
-    prompt: () => Promise<void>;
-}
 
 function wasDismissed(): boolean {
     try {
@@ -55,7 +52,7 @@ function initialMode(): PromptMode {
 
 export function InstallPrompt() {
     const [mode] = useState(initialMode);
-    const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(null);
+    const [deferred, setDeferred] = useState(getInstallPrompt);
     const [gone, setGone] = useState(false);
 
     useEffect(() => {
@@ -63,20 +60,15 @@ export function InstallPrompt() {
             return;
         }
 
-        function handleBeforeInstallPrompt(event: Event) {
-            event.preventDefault();
-            setDeferred(event as BeforeInstallPromptEvent);
-        }
-
         function handleInstalled() {
             setGone(true);
         }
 
-        window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+        const unsubscribe = subscribeInstallPrompt(setDeferred);
         window.addEventListener("appinstalled", handleInstalled);
 
         return () => {
-            window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+            unsubscribe();
             window.removeEventListener("appinstalled", handleInstalled);
         };
     }, [mode]);
@@ -91,6 +83,7 @@ export function InstallPrompt() {
         }
 
         deferred.prompt().catch(() => {});
+        clearInstallPrompt();
         setDeferred(null);
     }
 
