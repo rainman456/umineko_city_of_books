@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -14,7 +15,6 @@ import (
 	"umineko_city_of_books/internal/session"
 	"umineko_city_of_books/internal/settings"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/cors"
 	"github.com/gofiber/fiber/v3/middleware/etag"
@@ -33,40 +33,16 @@ var (
 	}
 )
 
-func httpStatusToSentry(status int) sentry.SpanStatus {
-	switch {
-	case status >= 200 && status < 300:
-		return sentry.SpanStatusOK
-	case status == 400:
-		return sentry.SpanStatusInvalidArgument
-	case status == 401:
-		return sentry.SpanStatusUnauthenticated
-	case status == 403:
-		return sentry.SpanStatusPermissionDenied
-	case status == 404:
-		return sentry.SpanStatusNotFound
-	case status == 409:
-		return sentry.SpanStatusAlreadyExists
-	case status == 429:
-		return sentry.SpanStatusResourceExhausted
-	case status == 499:
-		return sentry.SpanStatusCanceled
-	case status >= 500 && status < 600:
-		return sentry.SpanStatusInternalError
-	}
-	return sentry.SpanStatusUnknown
-}
-
 func Setup(app *fiber.App, settingsSvc settings.Service, sessionMgr *session.Manager, authzSvc authz.Service, droneblChecker *dronebl.Checker) {
 	app.Server().MaxRequestBodySize = settingsSvc.GetInt(context.Background(), config.SettingMaxBodySize)
 
 	app.Use(fiberRecover.New(fiberRecover.Config{
 		EnableStackTrace: true,
 		StackTraceHandler: func(ctx fiber.Ctx, e any) {
-			appLogger.Log.Error().
+			appLogger.Ctx(ctx.Context()).Error().
+				Err(fmt.Errorf("panic: %v", e)).
 				Str("method", ctx.Method()).
 				Str("path", ctx.Path()).
-				Interface("panic", e).
 				Str("stack", string(debug.Stack())).
 				Msg("recovered from panic in request handler")
 		},
@@ -105,23 +81,12 @@ func Setup(app *fiber.App, settingsSvc settings.Service, sessionMgr *session.Man
 	app.Use(func(ctx fiber.Ctx) error {
 		start := time.Now()
 
-		tx := sentry.StartTransaction(
-			ctx.Context(),
-			ctx.Method()+" "+ctx.Path(),
-			sentry.WithOpName("http.server"),
-		)
-		defer tx.Finish()
-
 		err := ctx.Next()
-
-		tx.Status = httpStatusToSentry(ctx.Response().StatusCode())
-		tx.SetData("http.method", ctx.Method())
-		tx.SetData("http.route", ctx.Path())
-		tx.SetData("http.response.status_code", ctx.Response().StatusCode())
 
 		if shouldSkipRequestLog(ctx) {
 			return err
 		}
+
 		latency := time.Since(start)
 		status := ctx.Response().StatusCode()
 		ip, _ := ctx.Locals("client_ip").(string)

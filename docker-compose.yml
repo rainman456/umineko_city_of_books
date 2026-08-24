@@ -1,8 +1,15 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:latest
     container_name: umineko-postgres
     restart: unless-stopped
+    logging: *default-logging
     env_file:
       - postgres.env
     volumes:
@@ -20,6 +27,7 @@ services:
     build: .
     container_name: umineko-city-of-books
     restart: unless-stopped
+    logging: *default-logging
     stop_grace_period: 30s
     depends_on:
       postgres:
@@ -43,6 +51,7 @@ services:
     image: valkey/valkey:latest
     container_name: umineko-valkey
     restart: unless-stopped
+    logging: *default-logging
     command: valkey-server --save "" --appendonly no
     ports:
       - "127.0.0.1:6379:6379"
@@ -51,6 +60,7 @@ services:
     image: valkey/valkey:latest
     container_name: umineko-valkey-cache
     restart: unless-stopped
+    logging: *default-logging
     command: valkey-server --save "" --appendonly no --maxmemory 4gb --maxmemory-policy allkeys-lru
     ports:
       - "127.0.0.1:6381:6379"
@@ -65,6 +75,7 @@ services:
     image: livekit/livekit-server:latest
     container_name: umineko-livekit
     restart: unless-stopped
+    logging: *default-logging
     command: --config /etc/livekit.yaml
     depends_on:
       - valkey
@@ -81,6 +92,7 @@ services:
     image: livekit/ingress:latest
     container_name: umineko-livekit-ingress
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - valkey
       - livekit
@@ -96,6 +108,7 @@ services:
     image: livekit/egress:latest
     container_name: umineko-livekit-egress
     restart: unless-stopped
+    logging: *default-logging
     cap_add:
       - SYS_ADMIN
     depends_on:

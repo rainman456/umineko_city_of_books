@@ -35,8 +35,8 @@ func overlayRecoverHandler(conn *websocket.Conn) {
 	}
 
 	logger.Log.Error().
+		Err(fmt.Errorf("panic: %v", r)).
 		Str("user_id", userID).
-		Str("panic", fmt.Sprintf("%v", r)).
 		Bytes("stack", debug.Stack()).
 		Msg("overlay ws handler panic")
 }

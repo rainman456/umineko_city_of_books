@@ -47,7 +47,6 @@ func initDatabase(cacheMgr *cache.Manager) (*repository.Repositories, settings.S
 	}
 
 	logger.Init(settingsSvc.Get(context.Background(), config.SettingLogLevel))
-	logger.ApplyDSN(settingsSvc.Get(context.Background(), config.SettingSentryDSN))
 
 	if err := telemetry.Apply(settingsSvc.Get(context.Background(), config.SettingOTLPEndpoint)); err != nil {
 		logger.Log.Warn().Err(err).Msg("otel apply failed")

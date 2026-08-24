@@ -68,7 +68,6 @@ var (
 	SettingUploadDir               = &SiteSettingDef{"upload_dir", "uploads", TypeString, false}
 	SettingBaseURL                 = &SiteSettingDef{"base_url", "http://localhost:4323", TypeString, false}
 	SettingLogLevel                = &SiteSettingDef{"log_level", "info", TypeString, false}
-	SettingSentryDSN               = &SiteSettingDef{"sentry_dsn", "", TypeString, true}
 	SettingOTLPEndpoint            = &SiteSettingDef{"otlp_endpoint", "", TypeString, false}
 	SettingPyroscopeURL            = &SiteSettingDef{"pyroscope_url", "", TypeString, false}
 	SettingMaxBodySize             = &SiteSettingDef{"max_body_size", "52428800", TypeInt, false}
@@ -176,7 +175,6 @@ var (
 		SettingUploadDir,
 		SettingBaseURL,
 		SettingLogLevel,
-		SettingSentryDSN,
 		SettingOTLPEndpoint,
 		SettingPyroscopeURL,
 		SettingMaxBodySize,

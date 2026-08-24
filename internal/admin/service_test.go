@@ -1192,7 +1192,6 @@ func TestGetSettings_MasksSecrets(t *testing.T) {
 		{name: "livekit api secret is masked", key: config.SettingLiveKitAPISecret.Key, stored: "lk-secret", want: config.SecretMask},
 		{name: "cloudflare api token is masked", key: config.SettingCloudflareAPIToken.Key, stored: "cf-token", want: config.SecretMask},
 		{name: "turnstile secret key is masked", key: config.SettingTurnstileSecretKey.Key, stored: "ts-secret", want: config.SecretMask},
-		{name: "sentry dsn is masked", key: config.SettingSentryDSN.Key, stored: "https://abc@sentry.example/1", want: config.SecretMask},
 		{name: "valkey url is masked", key: config.SettingValkeyURL.Key, stored: "redis://user:pw@valkey:6379", want: config.SecretMask},
 		{name: "unset secret stays empty", key: config.SettingSMTPPassword.Key, stored: "", want: ""},
 		{name: "site name is returned verbatim", key: config.SettingSiteName.Key, stored: "City of Books", want: "City of Books"},

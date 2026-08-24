@@ -223,7 +223,7 @@ Character accounts that answer in their own voice, backed by an OpenAI model. Ea
 Shared-viewing sessions launched from inside a group chat room. A party is one of two `type`s: a **virtual browser** (a remote Hyperbeam Chromium VM everyone loads and takes turns driving, so you can stream a video, browse, or play a web game together without anyone capturing their own screen) or a **screen share** (the starter broadcasts their own screen, with tab/system audio, over LiveKit). Either way the whole room watches together.
 
 - Started by a room member from the chat composer. The popover asks only for **Virtual browser** or **Screen share** and an optional title. There is nothing else to fill in: the client works out the nearest Hyperbeam region itself (cached for a day in local storage, falling back to the `hyperbeam_region` site setting), and the VM inherits light or dark from whichever theme the starter is using
-- Because that region is resolved in the starter's own browser, it is a *preference*, not a guarantee: a region your Hyperbeam plan has no machines in answers `503 err_no_available_vm` for that user and nobody else. `StartWatchParty` therefore walks a fallback chain (browser's region, then `hyperbeam_region`, then the remaining `EU`/`NA`/`AS`), retrying only on that capacity code and storing whichever region actually served the VM. Exhausting the chain raises `ErrWatchPartyNoCapacity` (503, logged at `Error` so it reaches GlitchTip) rather than a generic 500, and the popover shows the reason instead of failing silently
+- Because that region is resolved in the starter's own browser, it is a *preference*, not a guarantee: a region your Hyperbeam plan has no machines in answers `503 err_no_available_vm` for that user and nobody else. `StartWatchParty` therefore walks a fallback chain (browser's region, then `hyperbeam_region`, then the remaining `EU`/`NA`/`AS`), retrying only on that capacity code and storing whichever region actually served the VM. Exhausting the chain raises `ErrWatchPartyNoCapacity` (503, logged at `Error` so it surfaces in Grafana) rather than a generic 500, and the popover shows the reason instead of failing silently
 - Virtual-browser VMs are created with an ad blocker on, WebGL enabled, and the `smooth` picture mode, which favours video over crisp text. They idle out after 5 minutes with nobody connected and hard-stop after 4 hours
 - Screen sharers choose between two presets on the fly: **Gaming** (1080p60, VP9, favours framerate, up to 6 Mbps) and **Screenshare** (1080p15, VP9, favours resolution, up to 2.5 Mbps). The starter is the sole sharer; the grant's `CanPublishSources` enforces that no one else can publish a screen
 - A side panel renders the live VM iframe or the shared-screen video (with a **fullscreen** toggle on screen shares), plus a participants list, control-handoff request, a copy-invite link, and a **Hide** button that closes the window without ending the party
@@ -391,7 +391,7 @@ Site events can drive on-stream alert popups through SAMMI. A streamer downloads
 - **Vanity roles can carry permissions** too, drawn from the `general` set only. Handing out or taking back a permission-carrying vanity role runs the same protected-user guard as a role change, so it is refused against anyone at or above your own rank
 - Admin dashboard with site stats: total users, theories, responses, posts, comments, per-corner breakdown, 24h/7d/30d growth windows, most active users
 - User management: assign or revoke roles, ban with reason, unban, lock and unlock, force logout, reset the password, set or clear the email address, mark the email verified, rename and lock the display name, delete the account, and assign vanity roles. The user detail page records **Banned By** (linked profile) alongside Ban Reason and Banned At, and lists **other accounts sharing the same IP**. Bot accounts, and anyone at or above your own rank, are refused
-- DB-backed site settings with hot reload: body and upload limits, log level, registration mode, maintenance mode, turnstile, per-action rate limits, announcement banner, email provider (SMTP or Cloudflare), Sentry/GlitchTip DSN, OTLP and Pyroscope endpoints, Valkey cache URL, default theme, LiveKit voice, Hyperbeam, live streaming, mobile push, and the chatbots
+- DB-backed site settings with hot reload: body and upload limits, log level, registration mode, maintenance mode, turnstile, per-action rate limits, announcement banner, email provider (SMTP or Cloudflare), OTLP and Pyroscope endpoints, Valkey cache URL, default theme, LiveKit voice, Hyperbeam, live streaming, mobile push, and the chatbots
 - **Invite system**: open, invite-only, or closed registration. Admins generate one-time invite codes
 - **Maintenance mode** with custom title and message. Admins bypass it
 - **Audit log** for admin actions, filterable by action. Automated moderation events (word-filter hits) log with a NULL actor and render as "System" in the admin audit page, distinguishing them from human-initiated actions
@@ -428,7 +428,7 @@ Site events can drive on-stream alert popups through SAMMI. A streamer downloads
 - **Auto-expanding composers**: every text box grows as you type, capped at half the viewport before scrolling internally
 - **Security headers** on every response via helmet: HSTS with preload, `X-Frame-Options: DENY`, nosniff, a strict referrer policy, a narrow permissions policy, and an enforced CSP (`base-uri`, `form-action`, `frame-ancestors`, `object-src`) shipped alongside a much fuller `Content-Security-Policy-Report-Only`
 - **Structured logging** with zerolog, configurable log levels, settings change listener pattern
-- **GlitchTip / Sentry** error tracking via a configurable DSN, with structured attribute mapping in `internal/logger/glitchtip_shipper.go`
+- **Logs in Grafana**: with `LOG_FORMAT=json` the app writes structured JSON to stdout and ships nothing itself; Grafana Alloy tails the container from the Docker API into Loki. `trace_id` and `span_id` on a log line link straight to the matching Tempo trace
 - **Native mobile app**: the same React frontend packaged with Capacitor, using bearer-token auth and FCM push (see [Mobile app (Capacitor)](#mobile-app-capacitor))
 - Fully **mobile responsive** across all pages
 - **Cache headers**: `/static/assets/*` and HLS segments are immutable, uploads and static media are 30 days, HLS playlists and API responses are `no-cache`, HTML is `no-store`
@@ -445,7 +445,6 @@ Site events can drive on-stream alert popups through SAMMI. A streamer downloads
 - fasthttp/websocket for the WebSocket hub
 - zerolog for structured logging
 - wneessen/go-mail for email delivery
-- getsentry/sentry-go for GlitchTip / Sentry error tracking
 - disintegration/imaging for server-side image manipulation
 - openai/openai-go v3 (Responses API) for the chatbot character accounts
 - valkey-io/valkey-go, with `valkeyhook` for the tracing and metrics hook, for the optional app cache
@@ -486,7 +485,7 @@ Site events can drive on-stream alert popups through SAMMI. A streamer downloads
 - [LiveKit](https://livekit.io/) (self-hosted) as the SFU that carries voice in chat rooms, DMs, and watch parties, plus screen-share watch parties and live streaming
 - OpenAI for the chatbot character accounts, keyed from the admin panel
 - Firebase Cloud Messaging for native push to the packaged mobile app
-- Optional and entirely external: a Prometheus scraper, an OTLP trace collector, a Pyroscope server, and a GlitchTip / Sentry instance. None are bundled in the compose files
+- Optional and entirely external: a Prometheus scraper, an OTLP trace collector, a Pyroscope server, and a Loki instance with a Grafana Alloy collector for logs. None are bundled in the compose files
 
 ## Architecture
 
@@ -505,7 +504,7 @@ The server is a single Go binary that embeds the compiled Vite bundle and serves
         ┌─────────────────────────────────────────────────────────────────┐
         │                          Fiber v3 app                           │
         │  recover → tracing → host allow-list → security headers → etag  │
-        │  → cache headers → cors → log/sentry → maintenance → metrics    │
+        │  → cache headers → cors → access log → maintenance → metrics    │
         │  → last-seen IP        (auth and authz attach per route)        │
         └────────┬────────────────────────────────────────┬───────────────┘
                  │                                        │
@@ -581,9 +580,8 @@ A typical `POST /api/v1/theories` request walks through a fixed global middlewar
  │    CORS     │
  └──────┬──────┘
         ▼
- ┌─────────────┐   request-scoped client_ip, Sentry transaction, access log
- │  logger +   │
- │   sentry    │
+ ┌─────────────┐   request-scoped client_ip, access log with trace_id
+ │   logger    │
  └──────┬──────┘
         ▼
  ┌─────────────┐   JSON 503 on /api unless the caller has manage_settings
@@ -896,7 +894,7 @@ Adding a new page means adding a branch to `metaForPath()`; see [Adding a New Pa
 
 Wiring is explicit and split across four files at the repo root. There is no DI container: `initServices` builds every service in dependency order and returns the `services` struct, which is the dependency graph.
 
-- `init_db.go` (`initDatabase`): telemetry, `db.Open`, `db.Migrate`, `db.SeedContent`, the cache manager, the repositories, and the settings service. Once settings are loaded it re-inits the logger and applies the GlitchTip DSN, the OTLP endpoint, and the Pyroscope endpoint.
+- `init_db.go` (`initDatabase`): telemetry, `db.Open`, `db.Migrate`, `db.SeedContent`, the cache manager, the repositories, and the settings service. Once settings are loaded it re-applies the log level and applies the OTLP endpoint and the Pyroscope endpoint.
 - `init_services.go` (`initServices`): every service, in dependency order.
 - `server.go` (`initServer`, `initApp`): builds the Fiber app, installs middleware, assembles the services into a `controllers.Service`, registers routes, and returns the app plus a cleanup func.
 - `init_jobs.go` (`registerListeners`): settings listeners and the background job tickers, returning a stop func.
@@ -912,7 +910,7 @@ Wiring is explicit and split across four files at the repo root. There is no DI 
      │                                          SQL in internal/dao
      ▼
   settings.NewService (DB-backed, hot reload)
-     │  └─▶ re-init logger, GlitchTip DSN, OTLP, Pyroscope
+     │  └─▶ re-apply log level, OTLP, Pyroscope
      ▼                                                  (init_services.go)
   session, media.Processor, upload, authz, giphy + banlist,
   contentfilter, user, ws.Hub (main and overlay), email, push,
@@ -944,12 +942,12 @@ Shutdown runs the other way. The cleanup func returned by `initServer` drains th
 
 ### Observability
 
-Four independent signals, all optional and all pointed at their collector from **Admin → Settings**, so none of them needs a redeploy or an env var.
+Five independent signals. Metrics, traces, profiling and health need no redeploy: traces and profiling are pointed at their collector from **Admin → Settings**. Logs are the exception: the app only chooses its stdout format, and collection is owned entirely by the observability stack.
 
 - **Metrics**: a Prometheus registry is served on `/metrics`, and every request is timed by route, method, and status (`http_request_duration_seconds`, `http_requests_in_flight`), with static assets and uploads exempt so the histogram is not swamped. Alongside it sit database pool gauges (`db_pool_*`), WebSocket connection and inbound-frame counters (`ws_*`), Valkey hit / miss / latency and server stats (`cache_*`), and chatbot invocation, drop, and token counters (`chatbot_*`). `/metrics`, `/health`, `/livez`, and the LiveKit webhook are exempt from host authorisation so an internal scraper can reach them by IP; `docker-compose.prod.yml` carries the matching `prometheus-*` labels for scrape discovery and runs a `postgres-exporter` sidecar.
 - **Traces**: an OpenTelemetry span for every HTTP request, with W3C trace context extracted from the incoming headers and the trace ID echoed back as `X-Trace-ID`, plus a span per SQL statement through `otelsql` and per Valkey command through the cache hook. Set an **OTLP endpoint** and a batch exporter is registered on the live tracer provider; clear it and the processor is flushed, shut down, and unregistered, all without a restart.
 - **Profiling**: setting a **Pyroscope URL** starts continuous profiling (CPU, alloc objects and space, in-use objects and space, goroutines, mutex, and block) tagged with the hostname, and clearing it stops the profiler. The standard `/debug/pprof/*` handlers are also mounted, gated behind the `manage_settings` permission rather than left open.
-- **Errors**: GlitchTip / Sentry through a DSN setting, with structured attribute mapping in `internal/logger/glitchtip_shipper.go`. Only Error and Fatal are shipped; Warn and Info stay local.
+- **Logs**: the app ships nothing itself. With `LOG_FORMAT=json` it writes structured JSON to stdout and Grafana Alloy tails the container from the Docker daemon API into Loki, which is how every other container on the box is collected too. `logger.Ctx(ctx)` stamps `trace_id` and `span_id` on a log event, Alloy lifts both into Loki structured metadata, and the derived field on the Loki datasource jumps to the matching Tempo trace. The **log level** setting still hot-reloads and is the runtime volume lever.
 - **Health**: `/livez` is a bare liveness probe, which is what the container healthcheck hits. `/health` runs real dependency checks and returns 503 when one fails: Postgres is a hard dependency, LiveKit is checked only when voice is configured and is allowed to fail without failing the whole probe.
 
 ```
@@ -957,9 +955,9 @@ Four independent signals, all optional and all pointed at their collector from *
    probe   ──▶ GET /livez   ──▶ 200 always (process is up)
    probe   ──▶ GET /health  ──▶ 200 / 503 (postgres hard, livekit soft)
 
-   otlp_endpoint  ──▶ batch span processor ──▶ collector
+   otlp_endpoint  ──▶ batch span processor ──▶ tempo
    pyroscope_url  ──▶ continuous profiler  ──▶ pyroscope
-   sentry_dsn     ──▶ error shipper        ──▶ glitchtip
+   LOG_FORMAT=json ─▶ stdout ──▶ alloy (docker api) ──▶ loki
 ```
 
 ## Getting Started
@@ -1015,7 +1013,6 @@ At startup the app uppercases every site-setting key and, when an env var of tha
 | `BASE_URL`          | `base_url`           | `http://localhost:4323` | Public base URL, used for CORS and absolute links. No admin field today, so the seeded value sticks                                                                                                          |
 | `UPLOAD_DIR`        | `upload_dir`         | `uploads`               | Directory for uploaded files (relative to working dir). No admin field today, so the seeded value sticks                                                                                                     |
 | `LOG_LEVEL`         | `log_level`          | `info`                  | Initial log level, overridable from the admin panel at runtime                                                                                                                                              |
-| `SENTRY_DSN`        | `sentry_dsn`         | (empty)                 | GlitchTip / Sentry DSN for error shipping. Editable under **Admin → Settings**, alongside the OTLP endpoint and Pyroscope URL                                                                                |
 | `VALKEY_URL`        | `valkey_url`         | (empty)                 | App cache connection URL, separate from the LiveKit Valkey. Normally left empty and enabled from **Admin → Settings → Cache (Valkey)** (`redis://valkey-cache:6379/0` in Docker, `redis://localhost:6381/0` on the host) |
 | `HYPERBEAM_API_KEY` | `hyperbeam_api_key`  | (empty)                 | Hyperbeam API key for virtual-browser watch parties. Now set in admin, see below                                                                                                                            |
 | `HYPERBEAM_REGION`  | `hyperbeam_region`   | `EU`                    | Default Hyperbeam VM region (`NA`, `EU`, or `AS`), overridable per session from the start-party dialog. Now set in admin, see below                                                                          |
@@ -1024,9 +1021,11 @@ Any site-setting key works this way, not just the rows above, but these are the 
 
 > **Hyperbeam moved.** `HYPERBEAM_API_KEY` and `HYPERBEAM_REGION` were plain `.env` config. They are now the `hyperbeam_api_key` and `hyperbeam_region` site settings, edited under **Admin → Settings → Watch Parties, Voice & Streaming**, and the watch-party code reads them live from the settings service. The env vars survive only as first-boot seeds, which is why `.env.example` keeps them commented out.
 
-`.env.example` ships a deliberate subset: `GIPHY_API_KEY`, `POSTGRES_PORT`, `VALKEY_URL`, and `SENTRY_DSN` are all read by the app but are not in the template, so add them by hand when you need them.
+`LOG_FORMAT` is the one observability knob that is a plain env var rather than a site setting. Set `LOG_FORMAT=json` and the logger writes structured JSON to stdout for a collector to parse; leave it unset and you get the human-readable `ConsoleWriter` output. `docker-compose.prod.yml` sets it, the dev compose does not. It is deliberately not hot-reloadable, because changing the stdout format underneath a running collector would break its parse stages mid-stream.
 
-Everything else (registration mode, maintenance mode, turnstile keys, upload limits, rate limits, log level, email provider and SMTP settings, LiveKit and streaming credentials, chatbot configuration, default theme, Sentry DSN) is stored in the database via the `site_settings` table and editable from the admin panel at runtime with hot reload. The env file is only for things that must exist before the DB is reachable, and for the handful of secrets that never round-trip through the DB.
+`.env.example` ships a deliberate subset: `GIPHY_API_KEY`, `POSTGRES_PORT`, and `VALKEY_URL` are all read by the app but are not in the template, so add them by hand when you need them.
+
+Everything else (registration mode, maintenance mode, turnstile keys, upload limits, rate limits, log level, email provider and SMTP settings, LiveKit and streaming credentials, chatbot configuration, default theme) is stored in the database via the `site_settings` table and editable from the admin panel at runtime with hot reload. The env file is only for things that must exist before the DB is reachable, and for the handful of secrets that never round-trip through the DB.
 
 ### Running Locally
 

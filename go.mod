@@ -9,8 +9,6 @@ require (
 	github.com/corentings/chess/v2 v2.6.0
 	github.com/disintegration/imaging v1.6.2
 	github.com/fasthttp/websocket v1.5.12
-	github.com/getsentry/sentry-go v0.48.0
-	github.com/getsentry/sentry-go/zerolog v0.48.0
 	github.com/gofiber/contrib/v3/websocket v1.2.3
 	github.com/gofiber/fiber/v3 v3.5.0
 	github.com/google/uuid v1.6.0
@@ -77,7 +75,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/brunoga/deep v1.3.1 // indirect
-	github.com/buger/jsonparser v1.6.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

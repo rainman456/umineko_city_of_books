@@ -806,9 +806,16 @@ func (s *service) UpdateSettings(ctx context.Context, actorID uuid.UUID, setting
 	typed := make(map[config.SiteSettingKey]string, len(settings))
 	for k, v := range settings {
 		key := config.SiteSettingKey(k)
-		if def, ok := config.SettingByKey(key); ok && def.Secret && v == config.SecretMask {
+
+		def, ok := config.SettingByKey(key)
+		if !ok {
 			continue
 		}
+
+		if def.Secret && v == config.SecretMask {
+			continue
+		}
+
 		typed[key] = v
 	}
 

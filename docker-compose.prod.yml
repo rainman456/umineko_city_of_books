@@ -1,3 +1,9 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 networks:
   observability:
     external: true
@@ -7,6 +13,7 @@ services:
     image: postgres:18
     container_name: umineko-postgres
     restart: unless-stopped
+    logging: *default-logging
     env_file:
       - postgres.env
     volumes:
@@ -24,6 +31,7 @@ services:
     image: ghcr.io/victoriquemoe/umineko_city_of_books:latest
     container_name: umineko-city-of-books
     restart: unless-stopped
+    logging: *default-logging
     stop_grace_period: 30s
     depends_on:
       postgres:
@@ -35,6 +43,8 @@ services:
     env_file:
       - .env
       - postgres.env
+    environment:
+      LOG_FORMAT: "json"
     cap_drop:
       - ALL
     security_opt:
@@ -61,6 +71,7 @@ services:
     image: quay.io/prometheuscommunity/postgres-exporter:latest
     container_name: umineko-postgres-exporter
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -85,6 +96,7 @@ services:
     image: valkey/valkey:latest
     container_name: umineko-valkey
     restart: unless-stopped
+    logging: *default-logging
     network_mode: host
     command: valkey-server --appendonly yes --dir /data --bind 127.0.0.1 --port 6380
     volumes:
@@ -100,6 +112,7 @@ services:
     image: valkey/valkey:latest
     container_name: umineko-valkey-cache
     restart: unless-stopped
+    logging: *default-logging
     command: valkey-server --save "" --appendonly no --maxmemory 4gb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "valkey-cli", "ping"]
@@ -112,6 +125,7 @@ services:
     image: livekit/livekit-server:latest
     container_name: umineko-livekit
     restart: unless-stopped
+    logging: *default-logging
     command: --config /etc/livekit.yaml
     network_mode: host
     depends_on:
@@ -123,6 +137,7 @@ services:
     image: livekit/ingress:latest
     container_name: umineko-livekit-ingress
     restart: unless-stopped
+    logging: *default-logging
     network_mode: host
     depends_on:
       - valkey
@@ -136,6 +151,7 @@ services:
     image: livekit/egress:latest
     container_name: umineko-livekit-egress
     restart: unless-stopped
+    logging: *default-logging
     network_mode: host
     cap_add:
       - SYS_ADMIN

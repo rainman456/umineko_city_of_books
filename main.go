@@ -17,7 +17,6 @@ func main() {
 
 func run() error {
 	logger.Init(config.SettingLogLevel.Default)
-	defer logger.Shutdown()
 	defer telemetry.Shutdown()
 	defer telemetry.ShutdownProfiling()
 

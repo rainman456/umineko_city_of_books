@@ -1275,7 +1275,7 @@ export function AdminSettings() {
             </div>
 
             <div className={styles.card}>
-                <h2 className={styles.sectionTitle}>Logging & Error Reporting</h2>
+                <h2 className={styles.sectionTitle}>Logging & Observability</h2>
                 <div className={styles.fieldGroup}>
                     <div className={styles.field}>
                         <span className={styles.fieldLabel}>Log Level</span>
@@ -1289,15 +1289,6 @@ export function AdminSettings() {
                             <option value="warn">Warn</option>
                             <option value="error">Error</option>
                         </Select>
-                    </div>
-                    <div className={styles.field}>
-                        <span className={styles.fieldLabel}>Sentry DSN</span>
-                        <Input
-                            value={settings.sentry_dsn ?? ""}
-                            onChange={e => updateField("sentry_dsn", e.target.value)}
-                            fullWidth
-                            placeholder="Leave empty to disable"
-                        />
                     </div>
                     <div className={styles.field}>
                         <span className={styles.fieldLabel}>
