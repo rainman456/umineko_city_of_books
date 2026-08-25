@@ -122,7 +122,8 @@ func buildMessage(reg repository.DeviceRegistration, n Notification) *messaging.
 	return &messaging.Message{
 		Notification: notification,
 		Data:         n.Data,
-		Token:        reg.Token,
+		//lint:ignore SA1019 native clients register an FCM registration token, not an FID; moving to Fid needs the Android client to migrate first
+		Token: reg.Token,
 	}
 }
 
