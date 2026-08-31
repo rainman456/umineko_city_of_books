@@ -73,8 +73,26 @@ describe("buildMentionMatcher", () => {
         expect(matches("@beato")).toBe(true);
         expect(matches("@beato!")).toBe(true);
         expect(matches("@beato, are you there?")).toBe(true);
-        expect(matches("@beato-chan")).toBe(true);
         expect(matches("(@beato)")).toBe(true);
+    });
+
+    it("does not mistake a longer hyphenated name for this one", () => {
+        // given
+        const matches = matcherFor("beato");
+
+        // when / then
+        expect(matches("@beato-chan")).toBe(false);
+        expect(matches("@beato-chan and @beato")).toBe(true);
+    });
+
+    it("matches a name that contains a hyphen", () => {
+        // given
+        const matches = matcherFor("astro-chan");
+
+        // when / then
+        expect(matches("@astro-chan")).toBe(true);
+        expect(matches("hello @astro-chan!")).toBe(true);
+        expect(matches("@astro")).toBe(false);
     });
 
     it("does not match an email address that happens to end in the username", () => {

@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode } from "react";
 import hljs from "highlight.js/lib/common";
+import { MENTION_SOURCE } from "../../domain/mentions";
 import { renderColours } from "./colours";
 import { linkify } from "./linkify";
 
@@ -34,7 +35,7 @@ const INLINE_RULES: InlineRule[] = [
     { open: "_", close: "_", build: c => ({ kind: "mark", tag: "italic", children: c }) },
 ];
 
-const LINK_TOKEN_PATTERN = /^(?:https?:\/\/[^\s<>"]+|@[a-zA-Z0-9_]+)/;
+const LINK_TOKEN_PATTERN = new RegExp(`^(?:https?://[^\\s<>"]+|${MENTION_SOURCE})`);
 
 function findInlineClose(text: string, close: string, from: number): number {
     let i = from;

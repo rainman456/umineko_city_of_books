@@ -2,9 +2,14 @@ package mention
 
 import "regexp"
 
-const MaxMatches = 20
+const (
+	MaxMatches = 20
 
-var Pattern = regexp.MustCompile(`\B@([a-zA-Z0-9_]+)`)
+	UsernameChars  = `a-zA-Z0-9_`
+	UsernameSource = `[` + UsernameChars + `]+(?:-[` + UsernameChars + `]+)*`
+)
+
+var Pattern = regexp.MustCompile(`\B@(` + UsernameSource + `)`)
 
 func Usernames(body string) []string {
 	matches := Pattern.FindAllStringSubmatch(body, MaxMatches)

@@ -3,9 +3,10 @@ import { Link } from "react-router";
 import { MentionLink } from "../MentionLink/MentionLink";
 import { WaifuvaultEmbed } from "../WaifuvaultEmbed/WaifuvaultEmbed";
 import { detectWaifuvaultMedia } from "../WaifuvaultEmbed/detect";
+import { MENTION_SOURCE } from "../../domain/mentions";
 import { isInternalOrigin } from "../../platform/siteOrigin";
 
-const LINK_TOKEN_REGEX = /(https?:\/\/[^\s<>"]+|@[a-zA-Z0-9_]+)/g;
+const LINK_TOKEN_REGEX = new RegExp(`(https?://[^\\s<>"]+|${MENTION_SOURCE})`, "g");
 
 function isInternalURL(url: string): string | null {
     try {

@@ -17,6 +17,7 @@ import (
 	"umineko_city_of_books/internal/dto"
 	"umineko_city_of_books/internal/email"
 	"umineko_city_of_books/internal/logger"
+	"umineko_city_of_books/internal/mention"
 	"umineko_city_of_books/internal/notification"
 	"umineko_city_of_books/internal/repository"
 	"umineko_city_of_books/internal/session"
@@ -64,7 +65,7 @@ const (
 )
 
 var (
-	validUsername    = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+	validUsername    = regexp.MustCompile(`^` + mention.UsernameSource + `$`)
 	reservedPatterns = []string{"featherine", "faa", "auaurora", "bot"}
 )
 

@@ -71,9 +71,24 @@ func TestUsernames(t *testing.T) {
 			want: []string{"alice"},
 		},
 		{
-			name: "a dash ends a username",
+			name: "a hyphen inside a username is part of it",
 			body: "@alice-bob",
-			want: []string{"alice"},
+			want: []string{"alice-bob"},
+		},
+		{
+			name: "several hyphens are all kept",
+			body: "@astro-chan-two",
+			want: []string{"astro-chan-two"},
+		},
+		{
+			name: "a trailing hyphen is left out, so punctuation does not become part of the name",
+			body: "@alice- and @bob-",
+			want: []string{"alice", "bob"},
+		},
+		{
+			name: "a hyphenated name is still bounded by surrounding text",
+			body: "(@alice-bob) said so",
+			want: []string{"alice-bob"},
 		},
 		{
 			name: "repeated usernames are deduped in first-seen order",

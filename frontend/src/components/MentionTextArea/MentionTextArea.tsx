@@ -1,9 +1,12 @@
 import React, { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { User } from "../../types/api";
 import { type MentionSuggestion, useMentionSearch } from "../../hooks/useMentionSearch";
+import { MENTION_SOURCE } from "../../domain/mentions";
 import { COLOUR_CLASS, type ColourTag, colourRegex } from "../richText/colours";
 import { Butterfly } from "../Butterfly/Butterfly";
 import styles from "./MentionTextArea.module.css";
+
+const HIGHLIGHT_REGEX = new RegExp(`(^|\\s)(${MENTION_SOURCE})`, "g");
 
 export interface MentionTextAreaHandle {
     focus: () => void;
@@ -79,7 +82,7 @@ function escapeHtml(s: string): string {
 }
 
 function highlightMentionsInSegment(segment: string): string {
-    return segment.replace(/(^|\s)(@[a-zA-Z0-9_]+)/g, '$1<span class="mention-hl">$2</span>');
+    return segment.replace(HIGHLIGHT_REGEX, '$1<span class="mention-hl">$2</span>');
 }
 
 function highlightMentions(text: string): string {
