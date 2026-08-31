@@ -3,17 +3,9 @@ import { usePageTitle } from "../../hooks/usePageTitle";
 import { useScrollToHash } from "../../hooks/useScrollToHash";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import type { PostComment } from "../../types/api";
-import { useAnnouncement } from "../../api/queries/announcement";
-import {
-    useCreateAnnouncementComment,
-    useDeleteAnnouncementComment,
-    useLikeAnnouncementComment,
-    useUnlikeAnnouncementComment,
-    useUpdateAnnouncementComment,
-    useUploadAnnouncementCommentMedia,
-} from "../../api/mutations/announcement";
+import { useAnnouncement } from "../../hooks/queries/announcement";
 import { useAuth } from "../../hooks/useAuth";
+import { useCommentHandlers } from "../../hooks/useCommentHandlers";
 import { ProfileLink } from "../../components/ProfileLink/ProfileLink";
 import { CommentsSection } from "../../components/post/CommentsSection/CommentsSection";
 import { RelativeTimestamp } from "../../components/RelativeTimestamp/RelativeTimestamp";
@@ -34,12 +26,11 @@ export function AnnouncementDetailPage() {
     const hash = location.hash;
     const highlightedComment = hash.startsWith("#comment-") ? hash.replace("#comment-", "") : null;
 
-    const createCommentMutation = useCreateAnnouncementComment(id ?? "");
-    const updateCommentMutation = useUpdateAnnouncementComment(id ?? "");
-    const deleteCommentMutation = useDeleteAnnouncementComment(id ?? "");
-    const likeCommentMutation = useLikeAnnouncementComment(id ?? "");
-    const unlikeCommentMutation = useUnlikeAnnouncementComment(id ?? "");
-    const uploadMediaMutation = useUploadAnnouncementCommentMedia(id ?? "");
+    const { createCommentFn, updateFn, deleteFn, likeFn, unlikeFn, uploadMediaFn } = useCommentHandlers(
+        "announcement",
+        id ?? "",
+        { enabled: ["create", "update", "delete", "like", "unlike", "uploadMedia"] },
+    );
 
     useScrollToHash(!loading && !!announcement, highlightedComment ? `comment-${highlightedComment}` : null);
 
@@ -53,15 +44,6 @@ export function AnnouncementDetailPage() {
 
     const comments = announcement.comments ?? [];
 
-    const likeFn = (commentId: string) => likeCommentMutation.mutateAsync(commentId);
-    const unlikeFn = (commentId: string) => unlikeCommentMutation.mutateAsync(commentId);
-    const deleteFn = (commentId: string) => deleteCommentMutation.mutateAsync(commentId);
-    const updateFn = (commentId: string, body: string) =>
-        updateCommentMutation.mutateAsync({ id: commentId, body }).then(() => undefined);
-    const createCommentFn = (_postId: string, body: string, parentId?: string) =>
-        createCommentMutation.mutateAsync({ body, parentId });
-    const uploadMediaFn = (commentId: string, file: File) => uploadMediaMutation.mutateAsync({ commentId, file });
-
     return (
         <div className={styles.page}>
             <span className={styles.back} onClick={() => navigate("/announcements")}>
@@ -69,17 +51,23 @@ export function AnnouncementDetailPage() {
             </span>
 
             <div className={styles.detail}>
-                <h1 className={styles.detailTitle}>{announcement.title}</h1>
+                <h1 dir="auto" className={styles.detailTitle}>
+                    {announcement.title}
+                </h1>
                 <div className={styles.detailMeta}>
                     <ProfileLink user={announcement.author} size="small" />
                     <RelativeTimestamp value={announcement.created_at} />
                     {announcement.updated_at !== announcement.created_at && <span>(edited)</span>}
                 </div>
-                <div className={styles.body} dangerouslySetInnerHTML={{ __html: renderMarkdown(announcement.body) }} />
+                <div
+                    dir="auto"
+                    className={styles.body}
+                    dangerouslySetInnerHTML={{ __html: renderMarkdown(announcement.body) }}
+                />
             </div>
 
             <CommentsSection
-                comments={comments as unknown as PostComment[]}
+                comments={comments}
                 targetId={announcement.id}
                 user={user}
                 onChanged={() => refresh()}

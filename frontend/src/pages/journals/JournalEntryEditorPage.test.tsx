@@ -24,8 +24,8 @@ const {
     navigate: vi.fn(),
 }));
 
-vi.mock("../../api/queries/journal", () => ({ useJournal, useJournalEntry }));
-vi.mock("../../api/mutations/journal", () => ({
+vi.mock("../../hooks/queries/journal", () => ({ useJournal, useJournalEntry }));
+vi.mock("../../hooks/mutations/journal", () => ({
     useCreateJournalEntry,
     useDeleteJournalEntryMedia,
     useUpdateJournalEntry,
@@ -515,7 +515,7 @@ describe("JournalEntryEditorPage", () => {
         renderNew(author);
 
         // when
-        await user.click(screen.getByText("← Back to Rokkenjima Notes"));
+        await user.click(screen.getByText(/← Back to/));
 
         // then
         expect(navigate).toHaveBeenCalledWith("/journals/journal-1");

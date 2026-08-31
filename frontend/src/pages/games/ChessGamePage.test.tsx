@@ -1,7 +1,7 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { makeUser } from "../../test-utils/fixtures";
+import { makeGamePlayer, makeGameRoom, makeUser } from "../../test-utils/fixtures";
 import { renderWithProviders } from "../../test-utils/render";
 import type { GameRoom, GameRoomPlayer, UserProfile } from "../../types/api";
 import { ChessGamePage } from "./ChessGamePage";
@@ -28,8 +28,8 @@ const {
     navigate: vi.fn(),
 }));
 
-vi.mock("../../api/queries/gameRoom", () => ({ useGameRoom }));
-vi.mock("../../api/mutations/gameRoom", () => ({
+vi.mock("../../hooks/queries/gameRoom", () => ({ useGameRoom }));
+vi.mock("../../hooks/mutations/gameRoom", () => ({
     useAcceptDraw,
     useAcceptGameInvite,
     useDeclineDraw,
@@ -85,37 +85,22 @@ const guest = makeUser({ id: "guest", username: "beatrice", display_name: "Beatr
 const onlooker = makeUser({ id: "onlooker", username: "ronove", display_name: "Ronove" });
 
 function makePlayer(overrides: Partial<GameRoomPlayer> = {}): GameRoomPlayer {
-    const id = overrides.user_id ?? "host";
-    return {
-        user_id: id,
-        username: "battler",
-        display_name: "Battler",
-        avatar_url: "",
-        role: "player",
-        slot: 0,
-        joined: true,
-        connected: true,
-        user: { id, username: "battler", display_name: "Battler" },
-        ...overrides,
-    };
+    return makeGamePlayer({ user_id: "host", ...overrides });
 }
 
 function makeRoom(overrides: Partial<GameRoom> = {}): GameRoom {
-    return {
-        id: "room-1",
-        game_type: "chess",
-        status: "active",
-        state: {},
-        created_by: "host",
-        created_at: "2026-07-01T10:00:00Z",
-        updated_at: "2026-07-01T10:00:00Z",
-        players: [
-            makePlayer({ user_id: "host", slot: 0, display_name: "Battler" }),
-            makePlayer({ user_id: "guest", slot: 1, display_name: "Beatrice" }),
-        ],
-        watcher_count: 6,
-        ...overrides,
-    };
+    return makeGameRoom(
+        {},
+        {
+            created_by: "host",
+            players: [
+                makePlayer({ user_id: "host", slot: 0, display_name: "Battler" }),
+                makePlayer({ user_id: "guest", slot: 1, display_name: "Beatrice" }),
+            ],
+            watcher_count: 6,
+            ...overrides,
+        },
+    );
 }
 
 interface StubOptions {
@@ -231,6 +216,18 @@ describe("ChessGamePage", () => {
         expect(screen.queryByRole("button", { name: "Accept" })).not.toBeInTheDocument();
     });
 
+    it("holds a declined invite back from the board, which never got a state", () => {
+        // given
+        stubRoom({ room: makeRoom({ status: "declined" }) });
+
+        // when
+        renderGame();
+
+        // then
+        expect(screen.getByText("This match never started. The invite was declined or cancelled.")).toBeInTheDocument();
+        expect(screen.queryByLabelText("chess board")).not.toBeInTheDocument();
+    });
+
     it("offers the invitee the choice to accept or decline", () => {
         // given
         stubRoom({ room: makeRoom({ status: "pending" }) });
@@ -239,7 +236,9 @@ describe("ChessGamePage", () => {
         renderGame(guest);
 
         // then
-        expect(screen.getByText(/Battler has invited you to a chess game/)).toBeInTheDocument();
+        expect(screen.getByText(/has invited you to a chess game/)).toHaveTextContent(
+            "Battler has invited you to a chess game. Accept to start - you will play as black.",
+        );
         expect(screen.getByRole("button", { name: "Accept" })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Decline" })).toBeInTheDocument();
     });
@@ -252,7 +251,7 @@ describe("ChessGamePage", () => {
         renderGame(host);
 
         // then
-        expect(screen.getByText("Waiting for Beatrice to accept.")).toBeInTheDocument();
+        expect(screen.getByText(/Waiting for/)).toHaveTextContent("Waiting for Beatrice to accept.");
         expect(screen.queryByRole("button", { name: "Accept" })).not.toBeInTheDocument();
     });
 

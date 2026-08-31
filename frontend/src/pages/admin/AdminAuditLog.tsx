@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router";
-import { useAuditLog } from "../../api/queries/admin";
+import { useAuditLog } from "../../hooks/queries/admin";
+import { hasNextPage, usePageOffset } from "../../hooks/usePageOffset";
 import { usePageTitle } from "../../hooks/usePageTitle";
 import { Pagination } from "../../components/Pagination/Pagination";
 import { Select } from "../../components/Select/Select";
@@ -10,7 +11,7 @@ import {
     auditTargetLabel,
     parseAuditDetails,
     shortId,
-} from "../../utils/auditLog";
+} from "../../domain/audit";
 import { formatFullDateTime } from "../../utils/time";
 import styles from "./AdminAuditLog.module.css";
 
@@ -22,14 +23,14 @@ const FILTERABLE_ACTIONS = Object.keys(AUDIT_ACTION_LABELS).sort((a, b) =>
 
 export function AdminAuditLog() {
     usePageTitle("Admin - Audit Log");
-    const [offset, setOffset] = useState(0);
+    const page = usePageOffset({ limit: LIMIT });
     const [actionFilter, setActionFilter] = useState("");
-    const { entries, total, loading } = useAuditLog(actionFilter, LIMIT, offset);
+    const { entries, total, loading } = useAuditLog(actionFilter, page.limit, page.offset);
     const error = "";
 
     function handleFilterChange(value: string) {
         setActionFilter(value);
-        setOffset(0);
+        page.reset();
     }
 
     return (
@@ -88,6 +89,7 @@ export function AdminAuditLog() {
                                             <td>
                                                 {entry.subject_id ? (
                                                     <Link
+                                                        dir="auto"
                                                         to={`/admin/users/${entry.subject_id}`}
                                                         className={styles.subjectLink}
                                                     >
@@ -104,7 +106,9 @@ export function AdminAuditLog() {
                                                     <span className={styles.muted}>&mdash;</span>
                                                 )}
                                             </td>
-                                            <td>{entry.actor_name || <span className={styles.muted}>system</span>}</td>
+                                            <td dir="auto">
+                                                {entry.actor_name || <span className={styles.muted}>system</span>}
+                                            </td>
                                             <td>
                                                 <span className={styles.details} title={entry.details}>
                                                     {parseAuditDetails(entry.details).map((part, i) => (
@@ -125,13 +129,13 @@ export function AdminAuditLog() {
                     )}
 
                     <Pagination
-                        offset={offset}
-                        limit={LIMIT}
+                        offset={page.offset}
+                        limit={page.limit}
                         total={total}
-                        hasNext={offset + LIMIT < total}
-                        hasPrev={offset > 0}
-                        onNext={() => setOffset(prev => prev + LIMIT)}
-                        onPrev={() => setOffset(prev => Math.max(0, prev - LIMIT))}
+                        hasNext={hasNextPage(page, total)}
+                        hasPrev={page.hasPrev}
+                        onNext={page.goNext}
+                        onPrev={page.goPrev}
                     />
                 </>
             )}

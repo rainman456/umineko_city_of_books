@@ -11,6 +11,7 @@ import (
 	"umineko_city_of_books/internal/livekit"
 	"umineko_city_of_books/internal/media"
 	"umineko_city_of_books/internal/notification"
+	"umineko_city_of_books/internal/og"
 	"umineko_city_of_books/internal/repository"
 	"umineko_city_of_books/internal/role"
 	"umineko_city_of_books/internal/settings"
@@ -42,6 +43,7 @@ type (
 
 		SendMessage(ctx context.Context, senderID, roomID uuid.UUID, req dto.SendMessageRequest, files []FileUpload) (*dto.ChatMessageResponse, error)
 		GetRoomsByUser(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, error)
+		IsRoomMember(ctx context.Context, roomID, userID uuid.UUID) (bool, error)
 		DeleteChat(ctx context.Context, roomID, userID uuid.UUID) error
 		JoinRoom(ctx context.Context, roomID, userID uuid.UUID, ghost bool) (*dto.ChatRoomResponse, error)
 		SetRoomMuted(ctx context.Context, roomID, userID uuid.UUID, muted bool) error
@@ -139,6 +141,7 @@ func NewService(
 	hyperbeamSvc hyperbeam.Service,
 	livekitSvc livekit.Service,
 	contentFilter *contentfilter.Manager,
+	ogCache *og.Resolver,
 ) Service {
 	c := &core{
 		chatRepo:        chatRepo,
@@ -160,6 +163,7 @@ func NewService(
 		livekitSvc:      livekitSvc,
 		contentFilter:   contentFilter,
 		bannedWordsRule: contentfilter.NewChatBannedWordsRule(bannedWordRepo),
+		ogCache:         ogCache,
 	}
 
 	svs := &service{

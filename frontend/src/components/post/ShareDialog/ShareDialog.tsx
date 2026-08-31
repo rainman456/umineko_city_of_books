@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { useCreatePost } from "../../../api/mutations/post";
+import { useCreatePost } from "../../../hooks/mutations/post";
 import { Modal } from "../../Modal/Modal";
 import { Select } from "../../Select/Select";
 import { MentionTextArea } from "../../MentionTextArea/MentionTextArea";
@@ -70,7 +70,9 @@ export function ShareDialog({ isOpen, onClose, contentId, contentType, contentTi
                     showColours
                 />
 
-                <p className={styles.preview}>Sharing: {contentTitle || contentType}</p>
+                <p className={styles.preview}>
+                    Sharing: <bdi>{contentTitle || contentType}</bdi>
+                </p>
 
                 {error && <p className={styles.error}>{error}</p>}
 

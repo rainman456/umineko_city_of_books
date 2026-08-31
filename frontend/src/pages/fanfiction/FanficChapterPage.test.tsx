@@ -12,7 +12,7 @@ const { useFanfic, useFanficChapter, navigate } = vi.hoisted(() => ({
     navigate: vi.fn(),
 }));
 
-vi.mock("../../api/queries/fanfic", () => ({ useFanfic, useFanficChapter }));
+vi.mock("../../hooks/queries/fanfic", () => ({ useFanfic, useFanficChapter }));
 vi.mock("react-router", async importOriginal => {
     const actual = await importOriginal<typeof import("react-router")>();
     return { ...actual, useNavigate: () => navigate };
@@ -292,7 +292,7 @@ describe("FanficChapterPage", () => {
         renderPage();
 
         // when
-        await user.click(screen.getByText("← Back to Golden Land"));
+        await user.click(screen.getByText(/← Back to/));
 
         // then
         expect(navigate).toHaveBeenCalledWith("/fanfiction/fanfic-1");

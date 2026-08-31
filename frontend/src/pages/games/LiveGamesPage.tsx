@@ -1,21 +1,11 @@
-import { useEffect } from "react";
 import { Link } from "react-router";
-import { useQueryClient } from "@tanstack/react-query";
 import { usePageTitle } from "../../hooks/usePageTitle";
-import { useNotifications } from "../../hooks/useNotifications";
-import { useLiveGameRooms } from "../../api/queries/gameRoom";
-import { queryKeys } from "../../api/queryKeys";
+import { useLiveGameRooms } from "../../hooks/queries/gameRoom";
 import styles from "./GamesPages.module.css";
 
 export function LiveGamesPage() {
     usePageTitle("Live Games");
-    const { liveGamesCount } = useNotifications();
     const { rooms, loading, error } = useLiveGameRooms();
-    const queryClient = useQueryClient();
-
-    useEffect(() => {
-        queryClient.invalidateQueries({ queryKey: queryKeys.gameRoom.live() });
-    }, [liveGamesCount, queryClient]);
 
     return (
         <div className={styles.page}>
@@ -35,7 +25,8 @@ export function LiveGamesPage() {
                             <Link key={r.id} to={`/games/${r.game_type}/${r.id}`} className={styles.gameRow}>
                                 <div className={styles.gameRowContent}>
                                     <span className={styles.opponentLine}>
-                                        {white?.display_name ?? "?"} vs {black?.display_name ?? "?"}
+                                        <bdi>{white?.display_name ?? "?"}</bdi> vs{" "}
+                                        <bdi>{black?.display_name ?? "?"}</bdi>
                                     </span>
                                     <span className={styles.subline}>
                                         {r.game_type} — {r.watcher_count} watching

@@ -12,7 +12,9 @@ import (
 	"umineko_city_of_books/internal/dto"
 	"umineko_city_of_books/internal/logger"
 	"umineko_city_of_books/internal/media"
+	"umineko_city_of_books/internal/mention"
 	"umineko_city_of_books/internal/notification"
+	"umineko_city_of_books/internal/og"
 	"umineko_city_of_books/internal/repository"
 	"umineko_city_of_books/internal/repository/model"
 	"umineko_city_of_books/internal/role"
@@ -50,11 +52,13 @@ type (
 		auditRepo    repository.AuditLogRepository
 		blockSvc     block.Service
 		notifService notification.Service
+		mentionSvc   mention.Service
 		settingsSvc  settings.Service
 		authzSvc     authz.Service
 		hub          *ws.Hub
 		uploader     *media.Uploader
 		uploadSvc    upload.Service
+		ogCache      *og.Resolver
 	}
 )
 
@@ -64,11 +68,13 @@ func NewService(
 	auditRepo repository.AuditLogRepository,
 	blockSvc block.Service,
 	notifService notification.Service,
+	mentionSvc mention.Service,
 	settingsSvc settings.Service,
 	authzSvc authz.Service,
 	hub *ws.Hub,
 	uploader *media.Uploader,
 	uploadSvc upload.Service,
+	ogCache *og.Resolver,
 ) Service {
 	return &service{
 		repo:         repo,
@@ -76,11 +82,13 @@ func NewService(
 		auditRepo:    auditRepo,
 		blockSvc:     blockSvc,
 		notifService: notifService,
+		mentionSvc:   mentionSvc,
 		settingsSvc:  settingsSvc,
 		authzSvc:     authzSvc,
 		hub:          hub,
 		uploader:     uploader,
 		uploadSvc:    uploadSvc,
+		ogCache:      ogCache,
 	}
 }
 
@@ -223,6 +231,8 @@ func (s *service) Create(ctx context.Context, userID uuid.UUID, title, body stri
 
 	s.audit(ctx, userID, repository.AuditActionAnnouncementCreate, created.ID, userID, fmt.Sprintf("title=%s", title))
 
+	s.mentionSvc.NotifyAsync(ctx, mention.Reference{Kind: mention.KindAnnouncement, EntityID: created.ID}, userID, body)
+
 	return created.ID, nil
 }
 
@@ -271,6 +281,10 @@ func (s *service) Delete(ctx context.Context, actorID uuid.UUID, id uuid.UUID) e
 
 	s.audit(ctx, actorID, repository.AuditActionAnnouncementDelete, id, doomed.AuthorID, fmt.Sprintf("title=%s", doomed.Title))
 
+	if err := s.ogCache.ClearMetaCache(ctx, og.KindAnnouncement, id.String()); err != nil {
+		logger.Ctx(ctx).Warn().Err(err).Str("announcement_id", id.String()).Msg("clear og meta cache failed")
+	}
+
 	return nil
 }
 
@@ -305,18 +319,25 @@ func (s *service) CreateComment(ctx context.Context, announcementID, userID uuid
 		return uuid.Nil, ErrBlocked
 	}
 
-	created, err := s.repo.CreateComment(ctx, announcementID, parentID, userID, body)
+	commentID, err := s.mentionSvc.CreateComment(ctx, mention.CommentSpec{
+		Kind:     mention.KindAnnouncementComment,
+		EntityID: announcementID,
+		ParentID: parentID,
+		AuthorID: userID,
+		Body:     body,
+	})
 	if err != nil {
 		logger.Ctx(ctx).Error().Err(err).
 			Str("announcement_id", announcementID.String()).
 			Str("user_id", userID.String()).
 			Msg("failed to create announcement comment")
+
 		return uuid.Nil, err
 	}
 
-	go s.notifyCommentCreated(ann, announcementID, created.ID, userID, parentID)
+	go s.notifyCommentCreated(ann, announcementID, commentID, userID, parentID)
 
-	return created.ID, nil
+	return commentID, nil
 }
 
 func (s *service) notifyCommentCreated(ann *repository.AnnouncementRow, announcementID, commentID, actorID uuid.UUID, parentID *uuid.UUID) {

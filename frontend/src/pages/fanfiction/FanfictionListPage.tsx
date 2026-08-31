@@ -2,8 +2,8 @@ import { useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { useAuth } from "../../hooks/useAuth";
 import { usePageTitle } from "../../hooks/usePageTitle";
-import { useFanficLanguages, useFanficList, useFanficSeries } from "../../api/queries/fanfic";
-import { useCharactersFlat, useOCCharacters } from "../../api/queries/characters";
+import { useFanficLanguages, useFanficList, useFanficSeries, useOCCharacters } from "../../hooks/queries/fanfic";
+import { useCharactersFlat } from "../../hooks/queries/quoteCharacters";
 import { Button } from "../../components/Button/Button";
 import { ProfileLink } from "../../components/ProfileLink/ProfileLink";
 import { Pagination } from "../../components/Pagination/Pagination";
@@ -13,32 +13,9 @@ import { InfoPanel } from "../../components/InfoPanel/InfoPanel";
 import { RulesBox } from "../../components/RulesBox/RulesBox";
 import { ToggleSwitch } from "../../components/ToggleSwitch/ToggleSwitch";
 import { RelativeTimestamp } from "../../components/RelativeTimestamp/RelativeTimestamp";
-import { PieceTrigger } from "../../features/easterEgg";
+import { PieceTrigger } from "../../components/easterEgg";
+import { GENRES } from "../../domain/fanfic/form";
 import styles from "./FanficPages.module.css";
-
-const GENRES = [
-    "Adventure",
-    "Angst",
-    "Crime",
-    "Drama",
-    "Family",
-    "Fantasy",
-    "Friendship",
-    "General",
-    "Horror",
-    "Humour",
-    "Hurt/Comfort",
-    "Mystery",
-    "Parody",
-    "Poetry",
-    "Romance",
-    "Sci-Fi",
-    "Spiritual",
-    "Supernatural",
-    "Suspense",
-    "Tragedy",
-    "Western",
-];
 
 function ratingBadgeClass(rating: string): string {
     switch (rating) {
@@ -344,7 +321,9 @@ export function FanfictionListPage() {
                             )}
                             <div className={styles.cardContent}>
                                 <div className={styles.cardTitleRow}>
-                                    <h3 className={styles.cardTitle}>{f.title}</h3>
+                                    <h3 dir="auto" className={styles.cardTitle}>
+                                        {f.title}
+                                    </h3>
                                     <span className={`${styles.badge} ${ratingBadgeClass(f.rating)}`}>{f.rating}</span>
                                     {f.status === "complete" && (
                                         <span className={`${styles.badge} ${styles.badgeComplete}`}>Complete</span>
@@ -356,8 +335,8 @@ export function FanfictionListPage() {
 
                                 <div className={styles.cardByline}>
                                     <ProfileLink user={f.author} size="small" clickable={false} />
-                                    <span>{f.series}</span>
-                                    <span>{f.language}</span>
+                                    <span dir="auto">{f.series}</span>
+                                    <span dir="auto">{f.language}</span>
                                     {f.updated_at ? (
                                         <span>
                                             Updated <RelativeTimestamp value={f.updated_at} />
@@ -367,7 +346,11 @@ export function FanfictionListPage() {
                                     )}
                                 </div>
 
-                                {f.summary && <p className={styles.cardSummary}>{f.summary}</p>}
+                                {f.summary && (
+                                    <p dir="auto" className={styles.cardSummary}>
+                                        {f.summary}
+                                    </p>
+                                )}
 
                                 {(f.genres?.length > 0 ||
                                     f.tags?.length > 0 ||
@@ -381,7 +364,7 @@ export function FanfictionListPage() {
                                             </span>
                                         ))}
                                         {(f.tags ?? []).map(t => (
-                                            <span key={t} className={`${styles.badge} ${styles.badgeTag}`}>
+                                            <span key={t} dir="auto" className={`${styles.badge} ${styles.badgeTag}`}>
                                                 {t}
                                             </span>
                                         ))}
@@ -393,7 +376,7 @@ export function FanfictionListPage() {
                                         )}
                                         {(f.characters ?? []).map((c, i) => (
                                             <span key={`${c.character_name}-${i}`} className={styles.charPill}>
-                                                {c.character_name}
+                                                <span dir="auto">{c.character_name}</span>
                                             </span>
                                         ))}
                                     </div>

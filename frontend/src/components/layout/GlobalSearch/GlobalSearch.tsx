@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { useQuickSearch } from "../../../api/queries/search";
+import { useQuickSearch } from "../../../hooks/queries/search";
 import { useClickOutside } from "../../../hooks/useClickOutside";
 import { SearchResultRow } from "./SearchResultRow";
 import { SEARCH_GROUP_LABEL, SEARCH_GROUP_ORDER, SEARCH_TYPE_META, type SearchTypeGroup } from "./searchTypeMeta";
@@ -99,6 +99,7 @@ export function GlobalSearch() {
                 <input
                     ref={inputRef}
                     type="search"
+                    dir="auto"
                     className={styles.input}
                     placeholder="Search the site..."
                     value={value}
@@ -123,7 +124,11 @@ export function GlobalSearch() {
             {showDropdown && (
                 <div className={styles.dropdown} role="listbox" id={LISTBOX_ID} aria-label="Search results">
                     {loading && results.length === 0 && <div className={styles.loadingRow}>Searching...</div>}
-                    {!loading && !hasResults && <div className={styles.emptyRow}>No results for "{debounced}".</div>}
+                    {!loading && !hasResults && (
+                        <div className={styles.emptyRow}>
+                            No results for "<bdi>{debounced}</bdi>".
+                        </div>
+                    )}
                     {hasResults &&
                         grouped.map(({ group, items }) => (
                             <div
@@ -149,7 +154,7 @@ export function GlobalSearch() {
                         ))}
                     {hasResults && (
                         <button type="button" className={styles.seeAll} onClick={submit}>
-                            See all results for "{debounced}"
+                            See all results for "<bdi>{debounced}</bdi>"
                         </button>
                     )}
                 </div>

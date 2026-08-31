@@ -1,24 +1,16 @@
 import { screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { makeGamePlayer } from "../../test-utils/fixtures";
 import { renderWithProviders } from "../../test-utils/render";
 import type { GameRoomPlayer } from "../../types/api";
 import { DisconnectBanner } from "./DisconnectBanner";
 
 function makePlayer(overrides: Partial<GameRoomPlayer> = {}): GameRoomPlayer {
-    const id = overrides.user_id ?? "player-0";
-    return {
-        user_id: id,
-        username: "battler",
-        display_name: "Battler",
-        avatar_url: "",
-        role: "player",
-        slot: 0,
-        joined: true,
+    return makeGamePlayer({
         connected: false,
         disconnected_at: "2026-08-02T11:59:50.000Z",
-        user: { id, username: "battler", display_name: "Battler" },
         ...overrides,
-    };
+    });
 }
 
 describe("DisconnectBanner", () => {
@@ -56,7 +48,9 @@ describe("DisconnectBanner", () => {
         renderWithProviders(<DisconnectBanner offlinePlayer={offlinePlayer} forfeitRemaining={42} />);
 
         // then
-        expect(screen.getByText("Beatrice disconnected - forfeits in 42s")).toBeInTheDocument();
+        expect(screen.getByText(/disconnected - forfeits in 42s/)).toHaveTextContent(
+            "Beatrice disconnected - forfeits in 42s",
+        );
     });
 
     it("keeps showing the banner at the moment the countdown reaches zero", () => {
@@ -72,6 +66,8 @@ describe("DisconnectBanner", () => {
         );
 
         // then
-        expect(screen.getByText("Battler disconnected - forfeits in 0s")).toBeInTheDocument();
+        expect(screen.getByText(/disconnected - forfeits in 0s/)).toHaveTextContent(
+            "Battler disconnected - forfeits in 0s",
+        );
     });
 });

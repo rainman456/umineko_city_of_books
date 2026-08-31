@@ -16,9 +16,9 @@ const mocks = vi.hoisted(() => ({
     noop: vi.fn(),
 }));
 
-vi.mock("../../api/queries/art", () => ({ useArt: mocks.useArt }));
+vi.mock("../../hooks/queries/art", () => ({ useArt: mocks.useArt }));
 
-vi.mock("../../api/mutations/art", () => ({
+vi.mock("../../hooks/mutations/art", () => ({
     useLikeArt: () => ({ mutateAsync: mocks.likeArt }),
     useUnlikeArt: () => ({ mutateAsync: mocks.unlikeArt }),
     useDeleteArt: () => ({ mutateAsync: mocks.deleteArt }),
@@ -218,7 +218,7 @@ describe("ArtDetailPage content", () => {
         renderPage();
 
         // when
-        await user.click(screen.getByText("More by Ronove"));
+        await user.click(screen.getByText(/More by/));
 
         // then
         expect(mocks.navigate).toHaveBeenCalledWith("/user/ronove");

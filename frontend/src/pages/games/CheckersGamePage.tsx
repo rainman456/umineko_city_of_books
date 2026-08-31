@@ -4,11 +4,12 @@ import {
     useOfferDraw,
     useResignGame,
     useSubmitGameAction,
-} from "../../api/mutations/gameRoom";
+} from "../../hooks/mutations/gameRoom";
 import { CheckersBoardView } from "../../components/games/checkers/CheckersBoardView";
+import type { CheckersState, CheckersStats } from "../../types/api";
 import { GameRoomShell, type GameBoardProps } from "./GameRoomShell";
 
-function CheckersBoard({ room, viewer, isSpectator }: GameBoardProps) {
+function CheckersBoard({ room, viewer, isSpectator }: GameBoardProps<CheckersState, CheckersStats>) {
     const submitAction = useSubmitGameAction(room.id);
     const resign = useResignGame();
     const offerDraw = useOfferDraw();
@@ -48,7 +49,11 @@ export function CheckersGamePage() {
     return (
         <GameRoomShell
             gameName="Checkers"
-            inviteCopy={name => `${name} has invited you to a checkers game. Accept to start - you will play as black.`}
+            inviteCopy={name => (
+                <>
+                    <bdi>{name}</bdi> has invited you to a checkers game. Accept to start - you will play as black.
+                </>
+            )}
             Board={CheckersBoard}
         />
     );

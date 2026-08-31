@@ -1,8 +1,17 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Room } from "livekit-client";
+import { roomCapabilities } from "../../domain/chat/roomPolicy";
 import type { RoomController } from "../../hooks/useRoomController";
-import { makeUser } from "../../test-utils/fixtures";
+import { makeRoomController } from "../../hooks/useRoomController.fixture";
+import {
+    makeChatRoom,
+    makePublicUser,
+    makeRoomMember,
+    makeUser,
+    makeWatchPartySession,
+} from "../../test-utils/fixtures";
 import { renderWithProviders } from "../../test-utils/render";
 import type { ChatRoom, ChatRoomMember, User, UserProfile } from "../../types/api";
 import { RoomPage } from "./RoomPage";
@@ -10,21 +19,30 @@ import { RoomPage } from "./RoomPage";
 const mocks = vi.hoisted(() => ({
     useRoomController: vi.fn(),
     useIsMobile: vi.fn(),
-    forceMuteVoiceParticipant: vi.fn(),
+    forceMute: vi.fn(),
 }));
 
 vi.mock("../../hooks/useRoomController", () => ({ useRoomController: mocks.useRoomController }));
 
 vi.mock("../../hooks/useIsMobile", () => ({ useIsMobile: mocks.useIsMobile }));
 
-vi.mock("../../api/endpoints", () => ({ forceMuteVoiceParticipant: mocks.forceMuteVoiceParticipant }));
+vi.mock("../../hooks/mutations/chat", async importOriginal => {
+    const actual = await importOriginal<typeof import("../../hooks/mutations/chat")>();
+    return {
+        ...actual,
+        useForceMuteVoiceParticipant: (roomId: string | null | undefined) => ({
+            mutate: (variables: { userId: string; muted: boolean }, options?: { onError?: (err: unknown) => void }) =>
+                mocks.forceMute(roomId, variables, options),
+        }),
+    };
+});
 
 vi.mock("../../components/chat/mobile/MobileRoomView", () => ({
     MobileRoomView: () => <div data-testid="mobile-room-view" />,
 }));
 
-vi.mock("../../components/chat/MessageList/RoomMessageList", () => ({
-    RoomMessageList: () => <div data-testid="room-messages" />,
+vi.mock("../../components/chat/MessageList/MessageList", () => ({
+    MessageList: () => <div data-testid="room-messages" />,
 }));
 
 vi.mock("../../components/chat/ChatComposer/ChatComposer", () => ({
@@ -64,8 +82,10 @@ vi.mock("../../components/chat/WatchParty/WatchPartyButton", () => ({
 }));
 
 vi.mock("../../components/chat/WatchParty/WatchPartyModal", () => ({
-    WatchPartyModal: (props: { isStarter: boolean }) => (
-        <div data-testid="watch-party-modal">{String(props.isStarter)}</div>
+    WatchPartyModal: (props: { isStarter: boolean; voiceEnabled: boolean }) => (
+        <div data-testid="watch-party-modal" data-voice={String(props.voiceEnabled)}>
+            {String(props.isStarter)}
+        </div>
     ),
 }));
 
@@ -88,40 +108,15 @@ vi.mock("../../components/Lightbox/Lightbox", () => ({
 const viewer = makeUser({ id: "viewer-1", username: "battler", display_name: "Battler" });
 
 function makeMemberUser(overrides: Partial<User> = {}): User {
-    return { id: "member-1", username: "beatrice", display_name: "Beatrice", ...overrides };
+    return makePublicUser({ id: "member-1", ...overrides });
 }
 
 function makeMember(overrides: Partial<ChatRoomMember> = {}): ChatRoomMember {
-    return {
-        user: makeMemberUser(),
-        role: "member",
-        joined_at: "2026-01-01T00:00:00Z",
-        nickname: "",
-        member_avatar_url: "",
-        nickname_locked: false,
-        ...overrides,
-    };
+    return makeRoomMember({ user: makeMemberUser(), ...overrides });
 }
 
-function makeRoom(overrides: Partial<ChatRoom> = {}): ChatRoom {
-    return {
-        id: "room-1",
-        name: "Tea Parlour",
-        description: "",
-        type: "group",
-        is_public: true,
-        is_rp: false,
-        is_system: false,
-        tags: [],
-        viewer_muted: false,
-        viewer_ghost: false,
-        is_member: true,
-        member_count: 2,
-        hot_score: 0,
-        members: [],
-        created_at: "2026-01-01T00:00:00Z",
-        ...overrides,
-    };
+function makeActiveSession(startedBy: string): RoomController["watchParty"]["activeSession"] {
+    return { session: makeWatchPartySession({ started_by: startedBy }), embedURL: "", hasControl: false };
 }
 
 interface ControllerOptions {
@@ -131,17 +126,17 @@ interface ControllerOptions {
     roomId?: string | null;
     members?: ChatRoomMember[];
     memberGroups?: { label: string; members: ChatRoomMember[] }[];
-    presenceMapMerged?: Record<string, "active" | "idle" | "">;
+    presenceMapMerged?: RoomController["members"]["presence"];
     onlineIds?: string[];
     currentMember?: ChatRoomMember | null;
     sidebarCollapsed?: boolean;
     descExpanded?: boolean;
     typingNames?: string[];
-    voiceStatus?: string;
-    voiceRoom?: object | null;
+    voiceStatus?: RoomController["voice"]["status"];
+    voiceRoom?: RoomController["voice"]["room"];
     voiceEnabled?: boolean;
     watchPartyEnabled?: boolean;
-    activeSession?: object | null;
+    activeSession?: RoomController["watchParty"]["activeSession"];
     invitedPartyMissing?: boolean;
     lightboxSrc?: string | null;
     toast?: string | null;
@@ -163,21 +158,22 @@ interface ControllerOptions {
 
 function stubController(options: ControllerOptions = {}) {
     const handlers = {
-        navigate: vi.fn(),
+        backToRooms: vi.fn(),
         setMobileView: vi.fn(),
         toggleSidebar: vi.fn(),
         toggleDescExpanded: vi.fn(),
         setReplyingTo: vi.fn(),
         setLightboxSrc: vi.fn(),
         setToast: vi.fn(),
-        sendWSMessage: vi.fn(),
         setPinnedOpen: vi.fn(),
         setSearchOpen: vi.fn(),
         setEditProfileOpen: vi.fn(),
         setInviteModalOpen: vi.fn(),
         setModerationDialogOpen: vi.fn(),
         setOpenMemberMenu: vi.fn(),
+        setRoom: vi.fn(),
         setMembers: vi.fn(),
+        notifyTyping: vi.fn(),
         setNicknameDialogTarget: vi.fn(),
         setNicknameDialogValue: vi.fn(),
         setTimeoutDialogTarget: vi.fn(),
@@ -204,107 +200,117 @@ function stubController(options: ControllerOptions = {}) {
 
     const members = options.members ?? [];
     const onlineIds = new Set(options.onlineIds ?? []);
+    const base = makeRoomController();
+    const roomData = options.room === undefined ? makeChatRoom() : options.room;
+    const viewerUser = options.user === undefined ? viewer : options.user;
 
-    const controller = {
-        user: options.user === undefined ? viewer : options.user,
-        navigate: handlers.navigate,
-        loading: options.loading ?? false,
-        room: options.room === undefined ? makeRoom() : options.room,
-        roomId: options.roomId === undefined ? "room-1" : options.roomId,
-        members,
-        memberGroups: options.memberGroups ?? [{ label: "Members", members }],
-        presenceMapMerged: options.presenceMapMerged ?? {},
-        memberOnlineWeight: (id: string) => (onlineIds.has(id) ? 0 : 1),
-        currentMember: options.currentMember ?? null,
-        mobileView: "chat",
-        setMobileView: handlers.setMobileView,
-        sidebarCollapsed: options.sidebarCollapsed ?? false,
-        toggleSidebar: handlers.toggleSidebar,
-        descExpanded: options.descExpanded ?? false,
-        toggleDescExpanded: handlers.toggleDescExpanded,
-        typingNames: options.typingNames ?? [],
+    const controller = makeRoomController({
+        capabilities: roomCapabilities(roomData, viewerUser),
+        room: {
+            ...base.room,
+            data: roomData,
+            id: options.roomId === undefined ? "room-1" : (options.roomId ?? undefined),
+            loading: options.loading ?? false,
+            joining: options.joining ?? false,
+            set: handlers.setRoom,
+            join: handlers.handleJoin,
+            toggleMute: handlers.handleToggleMute,
+            leave: handlers.handleLeave,
+            remove: handlers.handleDelete,
+            backToRooms: handlers.backToRooms,
+        },
+        session: {
+            ...base.session,
+            viewer: viewerUser,
+            setReplyingTo: handlers.setReplyingTo,
+            typingNames: options.typingNames ?? [],
+            notifyTyping: handlers.notifyTyping,
+            onSent: handlers.handleSentMessage,
+            editLast: handlers.handleEditLast,
+        },
+        members: {
+            ...base.members,
+            list: members,
+            groups: options.memberGroups ?? [{ label: "Members", members }],
+            presence: options.presenceMapMerged ?? {},
+            onlineWeight: (id: string) => (onlineIds.has(id) ? 0 : 1),
+            current: options.currentMember ?? null,
+            set: handlers.setMembers,
+        },
+        moderation: {
+            ...base.moderation,
+            busy: options.busy ?? null,
+            openMemberMenu: options.openMemberMenu ?? null,
+            setOpenMemberMenu: handlers.setOpenMemberMenu,
+            nicknameDialogTarget: options.nicknameDialogTarget ?? null,
+            setNicknameDialogTarget: handlers.setNicknameDialogTarget,
+            setNicknameDialogValue: handlers.setNicknameDialogValue,
+            nicknameDialogError: options.nicknameDialogError ?? "",
+            nicknameDialogSaving: options.nicknameDialogSaving ?? false,
+            timeoutDialogTarget: options.timeoutDialogTarget ?? null,
+            setTimeoutDialogTarget: handlers.setTimeoutDialogTarget,
+            setTimeoutDialogAmount: handlers.setTimeoutDialogAmount,
+            setTimeoutDialogUnit: handlers.setTimeoutDialogUnit,
+            timeoutDialogError: options.timeoutDialogError ?? "",
+            timeoutDialogSaving: options.timeoutDialogSaving ?? false,
+            formatTimeoutUntil: (value?: string) => `until ${value ?? "never"}`,
+            openNicknameDialog: handlers.openNicknameDialog,
+            openTimeoutDialog: handlers.openTimeoutDialog,
+            handleModSetNickname: handlers.handleModSetNickname,
+            handleModUnlockNickname: handlers.handleModUnlockNickname,
+            handleSetTimeout: handlers.handleSetTimeout,
+            handleClearTimeout: handlers.handleClearTimeout,
+            handleKick: handlers.handleKick,
+            handleBan: handlers.handleBan,
+        },
+        prefs: {
+            ...base.prefs,
+            sidebarCollapsed: options.sidebarCollapsed ?? false,
+            toggleSidebar: handlers.toggleSidebar,
+            descExpanded: options.descExpanded ?? false,
+            toggleDescExpanded: handlers.toggleDescExpanded,
+            setMobileView: handlers.setMobileView,
+        },
+        anchor: {
+            ...base.anchor,
+            jumpTo: handlers.handleJumpToMessage,
+        },
         voice: {
+            ...base.voice,
             status: options.voiceStatus ?? "idle",
             room: options.voiceRoom ?? null,
-            join: vi.fn(),
-            leave: vi.fn(),
-            presenceCount: 0,
+            enabled: options.voiceEnabled ?? true,
         },
-        voiceEnabled: options.voiceEnabled ?? true,
         watchParty: {
+            ...base.watchParty,
             enabled: options.watchPartyEnabled ?? true,
-            screenShareEnabled: true,
-            sessions: [],
-            openSessionId: null,
             activeSession: options.activeSession ?? null,
             start: handlers.watchPartyStart,
-            join: vi.fn(),
-            openExisting: vi.fn(),
             close: handlers.watchPartyClose,
-            leave: vi.fn(),
-            end: vi.fn(),
-            transferControl: vi.fn(),
-            kick: vi.fn(),
-            identify: vi.fn(),
+            invitedPartyMissing: options.invitedPartyMissing ?? false,
         },
-        invitedPartyMissing: options.invitedPartyMissing ?? false,
-        replyingTo: null,
-        setReplyingTo: handlers.setReplyingTo,
-        viewerTimeoutUntil: undefined,
-        lightboxSrc: options.lightboxSrc ?? null,
-        setLightboxSrc: handlers.setLightboxSrc,
-        toast: options.toast ?? null,
-        setToast: handlers.setToast,
-        busy: options.busy ?? null,
-        joining: options.joining ?? false,
-        sendWSMessage: handlers.sendWSMessage,
-        pinnedOpen: options.pinnedOpen ?? false,
-        setPinnedOpen: handlers.setPinnedOpen,
-        searchOpen: options.searchOpen ?? false,
-        setSearchOpen: handlers.setSearchOpen,
-        pinnedRefreshKey: 0,
-        editProfileOpen: options.editProfileOpen ?? false,
-        setEditProfileOpen: handlers.setEditProfileOpen,
-        inviteModalOpen: options.inviteModalOpen ?? false,
-        setInviteModalOpen: handlers.setInviteModalOpen,
-        moderationDialogOpen: options.moderationDialogOpen ?? false,
-        setModerationDialogOpen: handlers.setModerationDialogOpen,
-        openMemberMenu: options.openMemberMenu ?? null,
-        setOpenMemberMenu: handlers.setOpenMemberMenu,
-        setMembers: handlers.setMembers,
-        nicknameDialogTarget: options.nicknameDialogTarget ?? null,
-        setNicknameDialogTarget: handlers.setNicknameDialogTarget,
-        nicknameDialogValue: "",
-        setNicknameDialogValue: handlers.setNicknameDialogValue,
-        nicknameDialogError: options.nicknameDialogError ?? "",
-        nicknameDialogSaving: options.nicknameDialogSaving ?? false,
-        timeoutDialogTarget: options.timeoutDialogTarget ?? null,
-        setTimeoutDialogTarget: handlers.setTimeoutDialogTarget,
-        timeoutDialogAmount: "10",
-        setTimeoutDialogAmount: handlers.setTimeoutDialogAmount,
-        timeoutDialogUnit: "seconds",
-        setTimeoutDialogUnit: handlers.setTimeoutDialogUnit,
-        timeoutDialogError: options.timeoutDialogError ?? "",
-        timeoutDialogSaving: options.timeoutDialogSaving ?? false,
-        formatTimeoutUntil: (value?: string) => `until ${value ?? "never"}`,
-        openNicknameDialog: handlers.openNicknameDialog,
-        openTimeoutDialog: handlers.openTimeoutDialog,
-        handleSentMessage: handlers.handleSentMessage,
-        handleJoin: handlers.handleJoin,
-        handleModSetNickname: handlers.handleModSetNickname,
-        handleModUnlockNickname: handlers.handleModUnlockNickname,
-        handleSetTimeout: handlers.handleSetTimeout,
-        handleClearTimeout: handlers.handleClearTimeout,
-        handleKick: handlers.handleKick,
-        handleBan: handlers.handleBan,
-        handleToggleMute: handlers.handleToggleMute,
-        handleLeave: handlers.handleLeave,
-        handleDelete: handlers.handleDelete,
-        handleJumpToMessage: handlers.handleJumpToMessage,
-        handleEditLast: handlers.handleEditLast,
-    };
+        panels: {
+            ...base.panels,
+            pinnedOpen: options.pinnedOpen ?? false,
+            setPinnedOpen: handlers.setPinnedOpen,
+            searchOpen: options.searchOpen ?? false,
+            setSearchOpen: handlers.setSearchOpen,
+            lightboxSrc: options.lightboxSrc ?? null,
+            setLightboxSrc: handlers.setLightboxSrc,
+            editProfileOpen: options.editProfileOpen ?? false,
+            setEditProfileOpen: handlers.setEditProfileOpen,
+            inviteModalOpen: options.inviteModalOpen ?? false,
+            setInviteModalOpen: handlers.setInviteModalOpen,
+            moderationDialogOpen: options.moderationDialogOpen ?? false,
+            setModerationDialogOpen: handlers.setModerationDialogOpen,
+        },
+        toast: {
+            message: options.toast ?? null,
+            show: handlers.setToast,
+        },
+    });
 
-    mocks.useRoomController.mockReturnValue(controller as unknown as RoomController);
+    mocks.useRoomController.mockReturnValue(controller);
 
     return handlers;
 }
@@ -318,7 +324,7 @@ function renderRoom(options: ControllerOptions = {}) {
 
 beforeEach(() => {
     mocks.useIsMobile.mockReturnValue(false);
-    mocks.forceMuteVoiceParticipant.mockResolvedValue(undefined);
+    mocks.forceMute.mockReset();
 });
 
 describe("RoomPage gates", () => {
@@ -418,7 +424,7 @@ describe("RoomPage gates", () => {
 describe("RoomPage header", () => {
     it("names the room and describes who can see it", () => {
         // given
-        const room = makeRoom({ name: "Rokkenjima", member_count: 7, is_public: true });
+        const room = makeChatRoom({ name: "Rokkenjima", member_count: 7, is_public: true });
 
         // when
         renderRoom({ room });
@@ -431,7 +437,7 @@ describe("RoomPage header", () => {
 
     it("marks a private room as private", () => {
         // given
-        const room = makeRoom({ is_public: false });
+        const room = makeChatRoom({ is_public: false });
 
         // when
         renderRoom({ room });
@@ -442,7 +448,7 @@ describe("RoomPage header", () => {
 
     it("badges a staff room and a roleplay room", () => {
         // given
-        const room = makeRoom({ is_system: true, is_rp: true });
+        const room = makeChatRoom({ is_system: true, is_rp: true });
 
         // when
         renderRoom({ room });
@@ -502,7 +508,7 @@ describe("RoomPage header", () => {
 describe("RoomPage room info", () => {
     it("leaves the info panel out when there is nothing to say", () => {
         // given
-        const room = makeRoom({ description: "", tags: [] });
+        const room = makeChatRoom({ description: "", tags: [] });
 
         // when
         renderRoom({ room });
@@ -513,7 +519,7 @@ describe("RoomPage room info", () => {
 
     it("offers the info panel when the room has a description", () => {
         // given
-        const room = makeRoom({ description: "Where the witches take tea" });
+        const room = makeChatRoom({ description: "Where the witches take tea" });
 
         // when
         renderRoom({ room });
@@ -525,7 +531,7 @@ describe("RoomPage room info", () => {
 
     it("lists the room's tags", () => {
         // given
-        const room = makeRoom({ tags: ["horror", "spoilers"] });
+        const room = makeChatRoom({ tags: ["horror", "spoilers"] });
 
         // when
         renderRoom({ room });
@@ -538,7 +544,7 @@ describe("RoomPage room info", () => {
     it("collapses the info panel when it is already expanded", async () => {
         // given
         const user = userEvent.setup();
-        const { toggleDescExpanded } = renderRoom({ room: makeRoom({ description: "Tea" }), descExpanded: true });
+        const { toggleDescExpanded } = renderRoom({ room: makeChatRoom({ description: "Tea" }), descExpanded: true });
 
         // when
         await user.click(screen.getByRole("button", { name: "Hide info ▲" }));
@@ -671,7 +677,7 @@ describe("RoomPage moderation", () => {
         const members = [makeMember()];
 
         // when
-        renderRoom({ members, room: makeRoom({ viewer_role: "member" }) });
+        renderRoom({ members, room: makeChatRoom({ viewer_role: "member" }) });
 
         // then
         expect(screen.queryByRole("button", { name: "Moderator actions" })).not.toBeInTheDocument();
@@ -682,7 +688,7 @@ describe("RoomPage moderation", () => {
         const members = [makeMember()];
 
         // when
-        renderRoom({ members, room: makeRoom({ viewer_role: "host" }) });
+        renderRoom({ members, room: makeChatRoom({ viewer_role: "host" }) });
 
         // then
         expect(screen.getByRole("button", { name: "Moderator actions" })).toBeInTheDocument();
@@ -693,7 +699,7 @@ describe("RoomPage moderation", () => {
         const user = userEvent.setup();
         const { setOpenMemberMenu } = renderRoom({
             members: [makeMember()],
-            room: makeRoom({ viewer_role: "host" }),
+            room: makeChatRoom({ viewer_role: "host" }),
         });
 
         // when
@@ -708,7 +714,7 @@ describe("RoomPage moderation", () => {
         const members = [makeMember()];
 
         // when
-        renderRoom({ members, room: makeRoom({ viewer_role: "host" }), openMemberMenu: "member-1" });
+        renderRoom({ members, room: makeChatRoom({ viewer_role: "host" }), openMemberMenu: "member-1" });
 
         // then
         expect(screen.getByRole("button", { name: "Kick member" })).toBeInTheDocument();
@@ -724,7 +730,7 @@ describe("RoomPage moderation", () => {
         renderRoom({
             user,
             members: [makeMember({ nickname_locked: true })],
-            room: makeRoom({ viewer_role: "member" }),
+            room: makeChatRoom({ viewer_role: "member" }),
             openMemberMenu: "member-1",
         });
 
@@ -738,7 +744,7 @@ describe("RoomPage moderation", () => {
         const user = userEvent.setup();
         const { handleKick } = renderRoom({
             members: [makeMember()],
-            room: makeRoom({ viewer_role: "host" }),
+            room: makeChatRoom({ viewer_role: "host" }),
             openMemberMenu: "member-1",
         });
 
@@ -754,7 +760,7 @@ describe("RoomPage moderation", () => {
         const user = userEvent.setup();
         const { handleBan } = renderRoom({
             members: [makeMember()],
-            room: makeRoom({ viewer_role: "host" }),
+            room: makeChatRoom({ viewer_role: "host" }),
             openMemberMenu: "member-1",
         });
 
@@ -770,7 +776,7 @@ describe("RoomPage moderation", () => {
         const user = userEvent.setup();
         const { openTimeoutDialog } = renderRoom({
             members: [makeMember()],
-            room: makeRoom({ viewer_role: "host" }),
+            room: makeChatRoom({ viewer_role: "host" }),
             openMemberMenu: "member-1",
         });
 
@@ -786,7 +792,7 @@ describe("RoomPage moderation", () => {
         const user = userEvent.setup();
         const { handleClearTimeout } = renderRoom({
             members: [makeMember({ timeout_until: "2026-02-01T13:00:00Z" })],
-            room: makeRoom({ viewer_role: "host" }),
+            room: makeChatRoom({ viewer_role: "host" }),
             openMemberMenu: "member-1",
         });
 
@@ -799,7 +805,7 @@ describe("RoomPage moderation", () => {
 
     it("leaves a system room unmoderated", () => {
         // given
-        const room = makeRoom({ is_system: true, viewer_role: "host" });
+        const room = makeChatRoom({ is_system: true, viewer_role: "host" });
 
         // when
         renderRoom({ members: [makeMember()], room });
@@ -824,7 +830,7 @@ describe("RoomPage sidebar actions", () => {
 
     it("offers to unmute a room that is already muted", () => {
         // given
-        const room = makeRoom({ viewer_muted: true });
+        const room = makeChatRoom({ viewer_muted: true });
 
         // when
         renderRoom({ room });
@@ -835,7 +841,7 @@ describe("RoomPage sidebar actions", () => {
 
     it("gives the host moderation and deletion", () => {
         // given
-        const room = makeRoom({ viewer_role: "host" });
+        const room = makeChatRoom({ viewer_role: "host" });
 
         // when
         renderRoom({ room });
@@ -847,7 +853,7 @@ describe("RoomPage sidebar actions", () => {
 
     it("offers an ordinary member the door instead", () => {
         // given
-        const room = makeRoom({ viewer_role: "member" });
+        const room = makeChatRoom({ viewer_role: "member" });
 
         // when
         renderRoom({ room });
@@ -859,7 +865,7 @@ describe("RoomPage sidebar actions", () => {
 
     it("keeps deletion and leaving away from a system room", () => {
         // given
-        const room = makeRoom({ is_system: true, viewer_role: "host" });
+        const room = makeChatRoom({ is_system: true, viewer_role: "host" });
 
         // when
         renderRoom({ room });
@@ -871,7 +877,7 @@ describe("RoomPage sidebar actions", () => {
 
     it("shows the invite button to the host of an ordinary room", () => {
         // given
-        const room = makeRoom({ viewer_role: "host" });
+        const room = makeChatRoom({ viewer_role: "host" });
 
         // when
         renderRoom({ room });
@@ -882,7 +888,7 @@ describe("RoomPage sidebar actions", () => {
 
     it("hides the invite button from a plain member", () => {
         // given
-        const room = makeRoom({ viewer_role: "member" });
+        const room = makeChatRoom({ viewer_role: "member" });
 
         // when
         renderRoom({ room });
@@ -894,7 +900,7 @@ describe("RoomPage sidebar actions", () => {
     it("shows the invite button to site staff who do not host the room", () => {
         // given
         const user = makeUser({ id: "viewer-1", role: "moderator" });
-        const room = makeRoom({ viewer_role: "member" });
+        const room = makeChatRoom({ viewer_role: "member" });
 
         // when
         renderRoom({ user, room });
@@ -906,7 +912,7 @@ describe("RoomPage sidebar actions", () => {
     it("hides the invite button from site staff in a system room", () => {
         // given
         const user = makeUser({ id: "viewer-1", role: "moderator" });
-        const room = makeRoom({ viewer_role: "member", is_system: true });
+        const room = makeChatRoom({ viewer_role: "member", is_system: true });
 
         // when
         renderRoom({ user, room });
@@ -941,13 +947,13 @@ describe("RoomPage sidebar actions", () => {
     it("goes back to the rooms list from the sidebar", async () => {
         // given
         const user = userEvent.setup();
-        const { navigate } = renderRoom();
+        const { backToRooms } = renderRoom();
 
         // when
         await user.click(screen.getByRole("button", { name: "Back to rooms" }));
 
         // then
-        expect(navigate).toHaveBeenCalledWith("/rooms");
+        expect(backToRooms).toHaveBeenCalledOnce();
     });
 
     it("says it is deleting while the room is being removed", () => {
@@ -955,7 +961,7 @@ describe("RoomPage sidebar actions", () => {
         const busy = "delete";
 
         // when
-        renderRoom({ room: makeRoom({ viewer_role: "host" }), busy });
+        renderRoom({ room: makeChatRoom({ viewer_role: "host" }), busy });
 
         // then
         expect(screen.getByRole("button", { name: "Deleting..." })).toBeDisabled();
@@ -968,7 +974,7 @@ describe("RoomPage voice and watch party", () => {
         const voiceStatus = "connecting";
 
         // when
-        renderRoom({ voiceStatus, voiceRoom: {} });
+        renderRoom({ voiceStatus, voiceRoom: new Room() });
 
         // then
         expect(screen.queryByRole("button", { name: "voice bar" })).not.toBeInTheDocument();
@@ -979,7 +985,7 @@ describe("RoomPage voice and watch party", () => {
         const voiceStatus = "connected";
 
         // when
-        renderRoom({ voiceStatus, voiceRoom: {}, room: makeRoom({ viewer_role: "host" }) });
+        renderRoom({ voiceStatus, voiceRoom: new Room(), room: makeChatRoom({ viewer_role: "host" }) });
 
         // then
         expect(await screen.findByRole("button", { name: "voice bar" })).toHaveAttribute("data-moderator", "true");
@@ -988,19 +994,45 @@ describe("RoomPage voice and watch party", () => {
     it("force mutes a voice participant in this room", async () => {
         // given
         const pointer = userEvent.setup();
-        renderRoom({ voiceStatus: "connected", voiceRoom: {}, room: makeRoom({ viewer_role: "host" }) });
+        renderRoom({ voiceStatus: "connected", voiceRoom: new Room(), room: makeChatRoom({ viewer_role: "host" }) });
         const bar = await screen.findByRole("button", { name: "voice bar" });
 
         // when
         await pointer.click(bar);
 
         // then
-        expect(mocks.forceMuteVoiceParticipant).toHaveBeenCalledWith("room-1", "u9", true);
+        expect(mocks.forceMute).toHaveBeenCalledWith("room-1", { userId: "u9", muted: true }, expect.anything());
+    });
+
+    it("tells the moderator when a force mute did not take", async () => {
+        // given
+        mocks.forceMute.mockImplementation(
+            (
+                _roomId: string | null | undefined,
+                _variables: { userId: string; muted: boolean },
+                options?: { onError?: (err: unknown) => void },
+            ) => options?.onError?.(new Error("LiveKit said no")),
+        );
+        const pointer = userEvent.setup();
+        const { setToast } = renderRoom({
+            voiceStatus: "connected",
+            voiceRoom: new Room(),
+            room: makeChatRoom({ viewer_role: "host" }),
+        });
+        const bar = await screen.findByRole("button", { name: "voice bar" });
+
+        // when
+        await pointer.click(bar);
+
+        // then
+        await waitFor(() => {
+            expect(setToast).toHaveBeenCalledWith("LiveKit said no");
+        });
     });
 
     it("gives an ordinary room the voice and watch party buttons", () => {
         // given
-        const room = makeRoom({ is_system: false });
+        const room = makeChatRoom({ is_system: false });
 
         // when
         renderRoom({ room });
@@ -1012,7 +1044,7 @@ describe("RoomPage voice and watch party", () => {
 
     it("keeps the voice and watch party buttons out of a system room", () => {
         // given
-        const room = makeRoom({ is_system: true });
+        const room = makeChatRoom({ is_system: true });
 
         // when
         renderRoom({ room });
@@ -1024,7 +1056,7 @@ describe("RoomPage voice and watch party", () => {
 
     it("opens the watch party window for an active session", async () => {
         // given
-        const activeSession = { session: { started_by: viewer.id } };
+        const activeSession = makeActiveSession(viewer.id);
 
         // when
         renderRoom({ activeSession });
@@ -1035,13 +1067,35 @@ describe("RoomPage voice and watch party", () => {
 
     it("knows the viewer did not start somebody else's watch party", async () => {
         // given
-        const activeSession = { session: { started_by: "someone-else" } };
+        const activeSession = makeActiveSession("someone-else");
 
         // when
         renderRoom({ activeSession });
 
         // then
         expect(await screen.findByTestId("watch-party-modal")).toHaveTextContent("false");
+    });
+
+    it("offers watch party voice when the site allows voice and screen share is on", async () => {
+        // given
+        const activeSession = makeActiveSession(viewer.id);
+
+        // when
+        renderRoom({ activeSession, voiceEnabled: true });
+
+        // then
+        expect(await screen.findByTestId("watch-party-modal")).toHaveAttribute("data-voice", "true");
+    });
+
+    it("obeys the site voice setting inside a watch party", async () => {
+        // given
+        const voiceEnabled = false;
+
+        // when
+        renderRoom({ activeSession: makeActiveSession(viewer.id), voiceEnabled });
+
+        // then
+        expect(await screen.findByTestId("watch-party-modal")).toHaveAttribute("data-voice", "false");
     });
 
     it("says so when the invited watch party has already ended", () => {
@@ -1131,7 +1185,7 @@ describe("RoomPage dialogs", () => {
         const inviteModalOpen = true;
 
         // when
-        renderRoom({ inviteModalOpen, room: makeRoom({ viewer_role: "host" }) });
+        renderRoom({ inviteModalOpen, room: makeChatRoom({ viewer_role: "host" }) });
 
         // then
         expect(screen.getByTestId("invite-modal")).toBeInTheDocument();
@@ -1142,7 +1196,7 @@ describe("RoomPage dialogs", () => {
         const moderationDialogOpen = true;
 
         // when
-        renderRoom({ moderationDialogOpen, room: makeRoom({ viewer_role: "host" }) });
+        renderRoom({ moderationDialogOpen, room: makeChatRoom({ viewer_role: "host" }) });
 
         // then
         expect(screen.getByTestId("moderation-dialog")).toBeInTheDocument();
@@ -1169,7 +1223,7 @@ describe("RoomPage notices", () => {
         renderRoom({ typingNames });
 
         // then
-        expect(screen.getByText("Beatrice and Ange are typing...")).toBeInTheDocument();
+        expect(screen.getByText(/are typing/)).toHaveTextContent("Beatrice and Ange are typing...");
     });
 
     it("shows a passing toast", () => {
@@ -1207,7 +1261,7 @@ describe("RoomPage notices", () => {
 
     it("wires the composer to the open room", () => {
         // given
-        const room = makeRoom({ id: "room-42" });
+        const room = makeChatRoom({ id: "room-42" });
 
         // when
         renderRoom({ room });

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { useLatestAnnouncement } from "../../api/queries/announcement";
+import { useLatestAnnouncement } from "../../hooks/queries/announcement";
 import { ProfileLink } from "../ProfileLink/ProfileLink";
 import { RelativeTimestamp } from "../RelativeTimestamp/RelativeTimestamp";
 import styles from "./AnnouncementCard.module.css";
@@ -37,14 +37,18 @@ export function AnnouncementCard() {
         <div className={styles.card}>
             <div className={styles.header}>
                 <span className={styles.badge}>Announcement</span>
-                <span className={styles.title} onClick={() => navigate(`/announcements/${announcement.id}`)}>
+                <span dir="auto" className={styles.title} onClick={() => navigate(`/announcements/${announcement.id}`)}>
                     {announcement.title}
                 </span>
                 <button className={styles.dismiss} onClick={handleDismiss} title="Dismiss">
                     {"✕"}
                 </button>
             </div>
-            <div className={styles.body} dangerouslySetInnerHTML={{ __html: renderMarkdown(announcement.body) }} />
+            <div
+                dir="auto"
+                className={styles.body}
+                dangerouslySetInnerHTML={{ __html: renderMarkdown(announcement.body) }}
+            />
             <span className={styles.readMore} onClick={() => navigate(`/announcements/${announcement.id}`)}>
                 Read more &rarr;
             </span>

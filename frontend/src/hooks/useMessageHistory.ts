@@ -9,39 +9,26 @@ import {
     useState,
 } from "react";
 import type { ChatMessage } from "../types/api";
-import { fetchRoomMessages, fetchRoomMessagesBefore } from "../api/queries/chat";
+import {
+    beforeCursor,
+    emptyMessageList,
+    MAX_MESSAGE_ID,
+    messageListReducer,
+    type MessageListAction,
+    type MessageListState,
+} from "../domain/chat/messageStore";
+import { fetchRoomMessages, fetchRoomMessagesBefore } from "./queries/chat";
 
 const PAGE_SIZE = 50;
 const AT_BOTTOM_THRESHOLD = 80;
-
-function withoutKnown(prev: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
-    const existing = new Set(prev.map(message => message.id));
-    const unique: ChatMessage[] = [];
-
-    for (const message of incoming) {
-        if (existing.has(message.id)) {
-            continue;
-        }
-
-        unique.push(message);
-        existing.add(message.id);
-    }
-
-    return unique;
-}
+const HOLD_HEADROOM = 150;
 
 export interface ScrollToBottomOptions {
     force?: boolean;
 }
 
-interface RoomState {
-    roomId: string | undefined;
-    messages: ChatMessage[];
-    hasMore: boolean;
-}
-
 export function useMessageHistory(roomId: string | undefined, maxMessages?: number) {
-    const [state, setState] = useState<RoomState>({ roomId, messages: [], hasMore: false });
+    const [state, setState] = useState<MessageListState>(() => emptyMessageList(roomId));
     const [loadingMore, setLoadingMore] = useState(false);
     const loadingMoreRef = useRef(false);
     const containerElRef = useRef<HTMLDivElement | null>(null);
@@ -49,14 +36,37 @@ export function useMessageHistory(roomId: string | undefined, maxMessages?: numb
     const endRef = useRef<HTMLDivElement>(null);
     const observerRef = useRef<ResizeObserver | null>(null);
     const suppressScrollToBottom = useRef(false);
+    const pointerHold = useRef(false);
     const isAtBottomRef = useRef(true);
     const currentRoomIdRef = useRef<string | undefined>(roomId);
-    const messagesRef = useRef<{ roomId: string | undefined; messages: ChatMessage[] }>({ roomId, messages: [] });
+    const stateRef = useRef<MessageListState>(state);
     useEffect(() => {
         currentRoomIdRef.current = roomId;
     }, [roomId]);
     const messages = useMemo<ChatMessage[]>(() => (state.roomId === roomId ? state.messages : []), [state, roomId]);
     const hasMore = state.roomId === roomId ? state.hasMore : false;
+
+    const dispatch = useCallback((action: MessageListAction) => {
+        const next = messageListReducer(stateRef.current, action);
+        stateRef.current = next;
+        setState(next);
+    }, []);
+
+    const trimLimit = useCallback(() => {
+        if (!isAtBottomRef.current || suppressScrollToBottom.current) {
+            return undefined;
+        }
+
+        if (pointerHold.current && maxMessages !== undefined) {
+            return maxMessages + HOLD_HEADROOM;
+        }
+
+        return maxMessages;
+    }, [maxMessages]);
+
+    const heldMessages = useCallback((forRoomId: string | undefined) => {
+        return stateRef.current.roomId === forRoomId ? stateRef.current.messages : [];
+    }, []);
 
     const computeIsAtBottom = useCallback(() => {
         const container = containerElRef.current;
@@ -70,9 +80,10 @@ export function useMessageHistory(roomId: string | undefined, maxMessages?: numb
         if (suppressScrollToBottom.current) {
             return;
         }
-        if (!opts?.force && !isAtBottomRef.current) {
+        if (!opts?.force && (pointerHold.current || !isAtBottomRef.current)) {
             return;
         }
+        pointerHold.current = false;
         isAtBottomRef.current = true;
         requestAnimationFrame(() => {
             const container = containerElRef.current;
@@ -86,9 +97,10 @@ export function useMessageHistory(roomId: string | undefined, maxMessages?: numb
         if (suppressScrollToBottom.current) {
             return;
         }
-        if (!opts?.force && !isAtBottomRef.current) {
+        if (!opts?.force && (pointerHold.current || !isAtBottomRef.current)) {
             return;
         }
+        pointerHold.current = false;
         isAtBottomRef.current = true;
         const container = containerElRef.current;
         if (container) {
@@ -98,11 +110,26 @@ export function useMessageHistory(roomId: string | undefined, maxMessages?: numb
 
     const snapToBottomIfPinned = useCallback(() => {
         const container = containerElRef.current;
-        if (!container || suppressScrollToBottom.current || !isAtBottomRef.current) {
+        if (!container || suppressScrollToBottom.current || pointerHold.current || !isAtBottomRef.current) {
             return;
         }
         container.scrollTop = container.scrollHeight;
     }, []);
+
+    const holdAutoScroll = useCallback((event: PointerEvent) => {
+        if (event.pointerType === "mouse") {
+            pointerHold.current = true;
+        }
+    }, []);
+
+    const releaseAutoScroll = useCallback(() => {
+        if (!pointerHold.current) {
+            return;
+        }
+
+        pointerHold.current = false;
+        snapToBottomIfPinned();
+    }, [snapToBottomIfPinned]);
 
     const ensureObserver = useCallback(() => {
         if (observerRef.current || typeof ResizeObserver === "undefined") {
@@ -117,15 +144,29 @@ export function useMessageHistory(roomId: string | undefined, maxMessages?: numb
     const containerRef = useCallback(
         (node: HTMLDivElement | null) => {
             const observer = node ? ensureObserver() : observerRef.current;
-            if (containerElRef.current && observer) {
-                observer.unobserve(containerElRef.current);
+            const previous = containerElRef.current;
+            if (previous) {
+                if (observer) {
+                    observer.unobserve(previous);
+                }
+                previous.removeEventListener("pointerenter", holdAutoScroll);
+                previous.removeEventListener("pointermove", holdAutoScroll);
+                previous.removeEventListener("pointerleave", releaseAutoScroll);
             }
+
             containerElRef.current = node;
-            if (node && observer) {
-                observer.observe(node);
+            pointerHold.current = false;
+
+            if (node) {
+                if (observer) {
+                    observer.observe(node);
+                }
+                node.addEventListener("pointerenter", holdAutoScroll, { passive: true });
+                node.addEventListener("pointermove", holdAutoScroll, { passive: true });
+                node.addEventListener("pointerleave", releaseAutoScroll, { passive: true });
             }
         },
-        [ensureObserver],
+        [ensureObserver, holdAutoScroll, releaseAutoScroll],
     );
 
     const contentRef = useCallback(
@@ -158,6 +199,7 @@ export function useMessageHistory(roomId: string | undefined, maxMessages?: numb
     useEffect(() => {
         loadingMoreRef.current = false;
         suppressScrollToBottom.current = false;
+        pointerHold.current = false;
         isAtBottomRef.current = true;
         if (!roomId) {
             return;
@@ -168,12 +210,7 @@ export function useMessageHistory(roomId: string | undefined, maxMessages?: numb
                 if (cancelled || currentRoomIdRef.current !== roomId) {
                     return;
                 }
-                messagesRef.current = { roomId, messages: res.messages };
-                setState({
-                    roomId,
-                    messages: res.messages,
-                    hasMore: res.messages.length < res.total,
-                });
+                dispatch({ type: "historyLoaded", roomId, messages: res.messages, total: res.total });
                 setLoadingMore(false);
                 setTimeout(() => {
                     const container = containerElRef.current;
@@ -186,47 +223,42 @@ export function useMessageHistory(roomId: string | undefined, maxMessages?: numb
                 if (cancelled || currentRoomIdRef.current !== roomId) {
                     return;
                 }
-                messagesRef.current = { roomId, messages: [] };
-                setState({ roomId, messages: [], hasMore: false });
+                dispatch({ type: "historyFailed", roomId });
             });
 
         return () => {
             cancelled = true;
         };
-    }, [roomId]);
+    }, [roomId, dispatch]);
 
     const setMessages: Dispatch<SetStateAction<ChatMessage[]>> = useCallback(
         updater => {
-            const sameRoom = messagesRef.current.roomId === currentRoomIdRef.current;
-            const base = sameRoom ? messagesRef.current.messages : [];
-            const next = typeof updater === "function" ? updater(base) : updater;
+            const patch = typeof updater === "function" ? updater : () => updater;
 
-            const canTrim =
-                maxMessages !== undefined &&
-                next.length > maxMessages &&
-                isAtBottomRef.current &&
-                !suppressScrollToBottom.current;
-            const applied = canTrim ? next.slice(next.length - maxMessages) : next;
-            messagesRef.current = { roomId: currentRoomIdRef.current, messages: applied };
-
-            setState(prev => ({
+            dispatch({
+                type: "messagesPatched",
                 roomId: currentRoomIdRef.current,
-                messages: applied,
-                hasMore: canTrim || (prev.roomId === currentRoomIdRef.current && prev.hasMore),
-            }));
+                patch,
+                limit: trimLimit(),
+            });
         },
-        [maxMessages],
+        [dispatch, trimLimit],
     );
 
-    const seedMessages = useCallback((seedRoomId: string, seed: ChatMessage[]) => {
-        currentRoomIdRef.current = seedRoomId;
-        messagesRef.current = { roomId: seedRoomId, messages: seed };
-        setState({ roomId: seedRoomId, messages: seed, hasMore: false });
-    }, []);
+    const seedMessages = useCallback(
+        (seedRoomId: string, seed: ChatMessage[]) => {
+            currentRoomIdRef.current = seedRoomId;
+            dispatch({ type: "seeded", roomId: seedRoomId, messages: seed });
+        },
+        [dispatch],
+    );
 
-    const setHasMore = useCallback((value: boolean) => {
-        setState(prev => ({ ...prev, hasMore: value }));
-    }, []);
+    const setHasMore = useCallback(
+        (value: boolean) => {
+            dispatch({ type: "hasMoreChanged", hasMore: value });
+        },
+        [dispatch],
+    );
 
     const loadOlder = useCallback(async () => {
         if (!roomId || loadingMoreRef.current || !hasMore) {
@@ -237,7 +269,7 @@ export function useMessageHistory(roomId: string | undefined, maxMessages?: numb
             return;
         }
         const oldest = current[0];
-        const beforeCursor = `${oldest.created_at}|${oldest.id}`;
+        const cursor = beforeCursor(oldest);
         loadingMoreRef.current = true;
         setLoadingMore(true);
         suppressScrollToBottom.current = true;
@@ -245,11 +277,16 @@ export function useMessageHistory(roomId: string | undefined, maxMessages?: numb
         try {
             const container = containerElRef.current;
             const prevScrollHeight = container ? container.scrollHeight : 0;
-            const res = await fetchRoomMessagesBefore(roomId, beforeCursor, PAGE_SIZE);
+            const res = await fetchRoomMessagesBefore(roomId, cursor, PAGE_SIZE);
             if (res.messages.length === 0) {
                 setHasMore(false);
             } else {
-                setMessages(prev => [...withoutKnown(prev, res.messages), ...prev]);
+                dispatch({
+                    type: "olderLoaded",
+                    roomId: currentRoomIdRef.current,
+                    messages: res.messages,
+                    limit: trimLimit(),
+                });
                 if (container) {
                     requestAnimationFrame(() => {
                         container.scrollTop = container.scrollHeight - prevScrollHeight;
@@ -264,7 +301,7 @@ export function useMessageHistory(roomId: string | undefined, maxMessages?: numb
                 suppressScrollToBottom.current = false;
             }, 200);
         }
-    }, [roomId, hasMore, messages, setHasMore, setMessages]);
+    }, [roomId, hasMore, messages, setHasMore, dispatch, trimLimit]);
 
     const handleScroll = useCallback(() => {
         const container = containerElRef.current;
@@ -289,26 +326,20 @@ export function useMessageHistory(roomId: string | undefined, maxMessages?: numb
             suppressScrollToBottom.current = true;
             try {
                 if (targetCreatedAt) {
-                    const cursor = `${targetCreatedAt}|ffffffff-ffff-ffff-ffff-ffffffffffff`;
+                    const cursor = beforeCursor({ created_at: targetCreatedAt, id: MAX_MESSAGE_ID });
                     const res = await fetchRoomMessagesBefore(roomId, cursor, PAGE_SIZE);
-                    setMessages(prev => {
-                        const merged = [...prev, ...withoutKnown(prev, res.messages)];
-                        merged.sort((a, b) => {
-                            const ta = Date.parse(a.created_at);
-                            const tb = Date.parse(b.created_at);
-                            if (ta !== tb) {
-                                return ta - tb;
-                            }
-                            return a.id.localeCompare(b.id);
-                        });
-                        return merged;
+                    dispatch({
+                        type: "gapLoaded",
+                        roomId: currentRoomIdRef.current,
+                        messages: res.messages,
+                        limit: trimLimit(),
                     });
                     if (res.messages.some(m => m.id === messageId)) {
                         return true;
                     }
                 }
                 while (pages < maxPages) {
-                    const current = messagesRef.current.roomId === roomId ? messagesRef.current.messages : [];
+                    const current = heldMessages(roomId);
                     if (current.some(m => m.id === messageId)) {
                         return true;
                     }
@@ -317,13 +348,18 @@ export function useMessageHistory(roomId: string | undefined, maxMessages?: numb
                     }
 
                     const oldest = current[0];
-                    const res = await fetchRoomMessagesBefore(roomId, `${oldest.created_at}|${oldest.id}`, PAGE_SIZE);
+                    const res = await fetchRoomMessagesBefore(roomId, beforeCursor(oldest), PAGE_SIZE);
                     if (res.messages.length === 0) {
                         setHasMore(false);
                         return false;
                     }
 
-                    setMessages(prev => [...withoutKnown(prev, res.messages), ...prev]);
+                    dispatch({
+                        type: "olderLoaded",
+                        roomId: currentRoomIdRef.current,
+                        messages: res.messages,
+                        limit: trimLimit(),
+                    });
                     if (res.messages.some(m => m.id === messageId)) {
                         return true;
                     }
@@ -336,22 +372,19 @@ export function useMessageHistory(roomId: string | undefined, maxMessages?: numb
                 }, 200);
             }
         },
-        [roomId, setMessages, setHasMore],
+        [roomId, dispatch, trimLimit, heldMessages, setHasMore],
     );
 
     const addMessage = useCallback(
         (message: ChatMessage) => {
-            setMessages(prev => {
-                const idx = prev.findIndex(m => m.id === message.id);
-                if (idx !== -1) {
-                    const next = prev.slice();
-                    next[idx] = message;
-                    return next;
-                }
-                return [...prev, message];
+            dispatch({
+                type: "messageUpserted",
+                roomId: currentRoomIdRef.current,
+                message,
+                limit: trimLimit(),
             });
         },
-        [setMessages],
+        [dispatch, trimLimit],
     );
 
     const resync = useCallback(async () => {
@@ -366,16 +399,14 @@ export function useMessageHistory(roomId: string | undefined, maxMessages?: numb
                 return;
             }
 
-            setMessages(prev => {
-                const fresh = withoutKnown(prev, res.messages);
-                if (fresh.length === 0) {
-                    return prev;
-                }
-
-                return [...prev, ...fresh];
+            dispatch({
+                type: "resynced",
+                roomId: currentRoomIdRef.current,
+                messages: res.messages,
+                limit: trimLimit(),
             });
         } catch {}
-    }, [setMessages]);
+    }, [dispatch, trimLimit]);
 
     return {
         messages,

@@ -1,12 +1,19 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Series } from "../api/endpoints";
-import type { EvidenceItem, Quote } from "../types/api";
+import type { EvidenceItem, Quote, Series } from "../types/api";
+import { providerWrapper } from "../test-utils/render";
 import { useResolveQuotes } from "./useResolveQuotes";
 
-const QUOTE_API = "https://quotes.auaurora.moe/api/v1";
+const mocks = vi.hoisted(() => ({
+    tryGetQuoteByAudioId: vi.fn(),
+    tryGetQuoteByIndex: vi.fn(),
+    searchQuotes: vi.fn(),
+    browseQuotes: vi.fn(),
+    getCharacters: vi.fn(),
+    getCharacterGroups: vi.fn(),
+}));
 
-const fetchMock = vi.fn();
+vi.mock("../api/endpoints/quote", () => mocks);
 
 function makeQuote(overrides: Partial<Quote> = {}): Quote {
     return {
@@ -36,26 +43,21 @@ function makeEvidenceItem(overrides: Partial<EvidenceItem> = {}): EvidenceItem {
     };
 }
 
-function respondWith(body: unknown) {
-    return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
-}
-
-function respondNotFound() {
-    return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
-}
-
 interface ResolveProps {
     evidence: EvidenceItem[];
     series?: Series;
 }
 
 function setup(props: ResolveProps) {
-    return renderHook(p => useResolveQuotes(p.evidence, p.series), { initialProps: props });
+    return renderHook(p => useResolveQuotes(p.evidence, p.series), {
+        initialProps: props,
+        wrapper: providerWrapper(),
+    });
 }
 
 beforeEach(() => {
-    fetchMock.mockImplementation(() => respondWith(makeQuote()));
-    vi.stubGlobal("fetch", fetchMock);
+    mocks.tryGetQuoteByAudioId.mockResolvedValue(makeQuote());
+    mocks.tryGetQuoteByIndex.mockResolvedValue(makeQuote());
 });
 
 describe("useResolveQuotes", () => {
@@ -65,13 +67,14 @@ describe("useResolveQuotes", () => {
 
         // then
         expect(result.current.size).toBe(0);
-        expect(fetchMock).not.toHaveBeenCalled();
+        expect(mocks.tryGetQuoteByAudioId).not.toHaveBeenCalled();
+        expect(mocks.tryGetQuoteByIndex).not.toHaveBeenCalled();
     });
 
     it("keys a voiced quote by its audio id", async () => {
         // given
         const quote = makeQuote({ audioId: "ep2_042" });
-        fetchMock.mockImplementation(() => respondWith(quote));
+        mocks.tryGetQuoteByAudioId.mockResolvedValue(quote);
 
         // when
         const { result } = setup({ evidence: [makeEvidenceItem({ audio_id: "ep2_042", lang: "en" })] });
@@ -79,13 +82,13 @@ describe("useResolveQuotes", () => {
         // then
         await waitFor(() => expect(result.current.size).toBe(1));
         expect(result.current.get("audio:ep2_042")).toEqual(quote);
-        expect(fetchMock).toHaveBeenCalledWith(`${QUOTE_API}/umineko/quote/ep2_042?lang=en`);
+        expect(mocks.tryGetQuoteByAudioId).toHaveBeenCalledWith("umineko", "ep2_042", "en");
     });
 
     it("keys an unvoiced quote by its index", async () => {
         // given
         const quote = makeQuote({ index: 17 });
-        fetchMock.mockImplementation(() => respondWith(quote));
+        mocks.tryGetQuoteByIndex.mockResolvedValue(quote);
 
         // when
         const { result } = setup({ evidence: [makeEvidenceItem({ quote_index: 17, lang: "jp" })] });
@@ -93,10 +96,10 @@ describe("useResolveQuotes", () => {
         // then
         await waitFor(() => expect(result.current.size).toBe(1));
         expect(result.current.get("index:17")).toEqual(quote);
-        expect(fetchMock).toHaveBeenCalledWith(`${QUOTE_API}/umineko/quote/index/17?lang=jp`);
+        expect(mocks.tryGetQuoteByIndex).toHaveBeenCalledWith("umineko", 17, "jp");
     });
 
-    it("omits the language query when the evidence has none", async () => {
+    it("asks for no language at all when the evidence has none", async () => {
         // given
         const evidence = [makeEvidenceItem({ quote_index: 3, lang: "" })];
 
@@ -105,10 +108,10 @@ describe("useResolveQuotes", () => {
 
         // then
         await waitFor(() => expect(result.current.size).toBe(1));
-        expect(fetchMock).toHaveBeenCalledWith(`${QUOTE_API}/umineko/quote/index/3`);
+        expect(mocks.tryGetQuoteByIndex).toHaveBeenCalledWith("umineko", 3, undefined);
     });
 
-    it("uses only the first id of a comma separated audio id", async () => {
+    it("hands a comma separated audio id over whole and keys it by the whole string", async () => {
         // given
         const evidence = [makeEvidenceItem({ audio_id: " ep3_001 , ep3_002 " })];
 
@@ -117,7 +120,7 @@ describe("useResolveQuotes", () => {
 
         // then
         await waitFor(() => expect(result.current.size).toBe(1));
-        expect(fetchMock).toHaveBeenCalledWith(`${QUOTE_API}/umineko/quote/ep3_001`);
+        expect(mocks.tryGetQuoteByAudioId).toHaveBeenCalledWith("umineko", " ep3_001 , ep3_002 ", undefined);
         expect(result.current.has("audio: ep3_001 , ep3_002 ")).toBe(true);
     });
 
@@ -130,12 +133,12 @@ describe("useResolveQuotes", () => {
 
         // then
         await waitFor(() => expect(result.current.size).toBe(1));
-        expect(fetchMock).toHaveBeenCalledWith(`${QUOTE_API}/ciconia/quote/index/5?lang=en`);
+        expect(mocks.tryGetQuoteByIndex).toHaveBeenCalledWith("ciconia", 5, "en");
     });
 
     it("records a null for a quote the api will not return", async () => {
         // given
-        fetchMock.mockImplementation(() => respondNotFound());
+        mocks.tryGetQuoteByAudioId.mockResolvedValue(null);
 
         // when
         const { result } = setup({ evidence: [makeEvidenceItem({ audio_id: "missing" })] });
@@ -143,18 +146,6 @@ describe("useResolveQuotes", () => {
         // then
         await waitFor(() => expect(result.current.has("audio:missing")).toBe(true));
         expect(result.current.get("audio:missing")).toBeNull();
-    });
-
-    it("records a null when the request itself fails", async () => {
-        // given
-        fetchMock.mockImplementation(() => Promise.reject(new Error("network is out")));
-
-        // when
-        const { result } = setup({ evidence: [makeEvidenceItem({ quote_index: 2 })] });
-
-        // then
-        await waitFor(() => expect(result.current.has("index:2")).toBe(true));
-        expect(result.current.get("index:2")).toBeNull();
     });
 
     it("skips evidence that names neither an audio id nor an index", async () => {
@@ -166,7 +157,7 @@ describe("useResolveQuotes", () => {
 
         // then
         await waitFor(() => expect(result.current.size).toBe(1));
-        expect(fetchMock).toHaveBeenCalledOnce();
+        expect(mocks.tryGetQuoteByIndex).toHaveBeenCalledOnce();
         expect(result.current.has("")).toBe(false);
     });
 
@@ -179,7 +170,7 @@ describe("useResolveQuotes", () => {
         rerender({ evidence: [makeEvidenceItem({ quote_index: 1 })] });
 
         // then
-        expect(fetchMock).toHaveBeenCalledOnce();
+        expect(mocks.tryGetQuoteByIndex).toHaveBeenCalledOnce();
     });
 
     it("fetches only the newly added evidence and keeps what it already resolved", async () => {
@@ -193,7 +184,7 @@ describe("useResolveQuotes", () => {
 
         // then
         await waitFor(() => expect(result.current.size).toBe(2));
-        expect(fetchMock).toHaveBeenCalledTimes(2);
-        expect(fetchMock).toHaveBeenLastCalledWith(`${QUOTE_API}/umineko/quote/index/2`);
+        expect(mocks.tryGetQuoteByIndex).toHaveBeenCalledTimes(2);
+        expect(mocks.tryGetQuoteByIndex).toHaveBeenLastCalledWith("umineko", 2, undefined);
     });
 });

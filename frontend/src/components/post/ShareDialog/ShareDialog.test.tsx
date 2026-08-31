@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
     navigate: vi.fn(),
 }));
 
-vi.mock("../../../api/mutations/post", () => ({
+vi.mock("../../../hooks/mutations/post", () => ({
     useCreatePost: () => ({ mutateAsync: mocks.createPost }),
 }));
 
@@ -69,7 +69,7 @@ describe("ShareDialog", () => {
         renderDialog({ contentTitle });
 
         // then
-        expect(screen.getByText("Sharing: Kanon is Yasu")).toBeInTheDocument();
+        expect(screen.getByText(/Sharing:/)).toHaveTextContent("Sharing: Kanon is Yasu");
     });
 
     it("falls back to the content type when there is no title", () => {
@@ -80,7 +80,7 @@ describe("ShareDialog", () => {
         renderDialog({ contentTitle });
 
         // then
-        expect(screen.getByText("Sharing: theory")).toBeInTheDocument();
+        expect(screen.getByText(/Sharing:/)).toHaveTextContent("Sharing: theory");
     });
 
     it("shares to the general corner with an empty message by default", async () => {

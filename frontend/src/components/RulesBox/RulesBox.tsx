@@ -1,4 +1,4 @@
-import { useRules } from "../../api/queries/misc";
+import { useRules } from "../../hooks/queries/site";
 import styles from "./RulesBox.module.css";
 
 interface RulesBoxProps {
@@ -15,7 +15,9 @@ export function RulesBox({ page }: RulesBoxProps) {
     return (
         <div className={styles.box}>
             <div className={styles.label}>Rules</div>
-            <div className={styles.content}>{rules}</div>
+            <div dir="auto" className={styles.content}>
+                {rules}
+            </div>
         </div>
     );
 }

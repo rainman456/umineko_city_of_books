@@ -1,47 +1,30 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { makeGamePlayer, makeGameRoom } from "../../test-utils/fixtures";
 import { renderWithProviders } from "../../test-utils/render";
-import type { GameRoom, GameRoomPlayer } from "../../types/api";
+import type { GameRoom } from "../../types/api";
 import { PastGamesPage } from "./PastGamesPage";
 
 const { useFinishedGameRooms } = vi.hoisted(() => ({ useFinishedGameRooms: vi.fn() }));
 
-vi.mock("../../api/queries/gameRoom", () => ({ useFinishedGameRooms }));
-
-function makePlayer(overrides: Partial<GameRoomPlayer> = {}): GameRoomPlayer {
-    const id = overrides.user_id ?? "player-0";
-    return {
-        user_id: id,
-        username: "battler",
-        display_name: "Battler",
-        avatar_url: "",
-        role: "player",
-        slot: 0,
-        joined: true,
-        connected: true,
-        user: { id, username: "battler", display_name: "Battler" },
-        ...overrides,
-    };
-}
+vi.mock("../../hooks/queries/gameRoom", () => ({ useFinishedGameRooms }));
 
 function makeRoom(overrides: Partial<GameRoom> = {}): GameRoom {
-    return {
-        id: "room-1",
-        game_type: "chess",
-        status: "finished",
-        state: {},
-        created_by: "a",
-        created_at: "2026-07-01T10:00:00Z",
-        updated_at: "2026-07-01T12:00:00Z",
-        finished_at: "2026-07-01T12:00:00Z",
-        players: [
-            makePlayer({ user_id: "a", slot: 0, display_name: "Battler" }),
-            makePlayer({ user_id: "b", slot: 1, display_name: "Beatrice" }),
-        ],
-        watcher_count: 0,
-        ...overrides,
-    };
+    return makeGameRoom(
+        {},
+        {
+            status: "finished",
+            created_by: "a",
+            updated_at: "2026-07-01T12:00:00Z",
+            finished_at: "2026-07-01T12:00:00Z",
+            players: [
+                makeGamePlayer({ user_id: "a", slot: 0, display_name: "Battler" }),
+                makeGamePlayer({ user_id: "b", slot: 1, display_name: "Beatrice" }),
+            ],
+            ...overrides,
+        },
+    );
 }
 
 interface StubOptions {
@@ -76,7 +59,7 @@ describe("PastGamesPage", () => {
 
         // then
         expect(screen.getByText("Loading...")).toBeInTheDocument();
-        expect(screen.queryByText("Battler vs Beatrice")).not.toBeInTheDocument();
+        expect(screen.queryByRole("link", { name: /Battler vs Beatrice/ })).not.toBeInTheDocument();
     });
 
     it("says there is nothing to browse when no game has finished", () => {
@@ -109,7 +92,7 @@ describe("PastGamesPage", () => {
         renderWithProviders(<PastGamesPage />);
 
         // then
-        expect(screen.getByText(/Battler won/)).toBeInTheDocument();
+        expect(screen.getByRole("link", { name: /Battler won/ })).toBeInTheDocument();
     });
 
     it("names the winner of a game the second seat took", () => {
@@ -120,7 +103,7 @@ describe("PastGamesPage", () => {
         renderWithProviders(<PastGamesPage />);
 
         // then
-        expect(screen.getByText(/Beatrice won/)).toBeInTheDocument();
+        expect(screen.getByRole("link", { name: /Beatrice won/ })).toBeInTheDocument();
     });
 
     it("calls a game with no winner a draw", () => {

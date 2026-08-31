@@ -8,28 +8,27 @@ import type {
     BannedWordAction,
     BannedWordMatchMode,
     BannedWordRule,
-    BotsWillBeKickedResponse,
     ChatRoom,
     CreateBannedWordRequest,
     UpdateGroupRoomRequest,
     User,
 } from "../../../types/api";
-import { ApiError } from "../../../api/client";
-import { useChatRoomBannedWords, useChatRoomBans } from "../../../api/queries/chat";
+import { useChatRoomBannedWords, useChatRoomBans } from "../../../hooks/queries/chat";
 import {
+    readBotsWillBeKicked,
     useCreateChatRoomBannedWord,
     useDeleteChatRoomBannedWord,
     useUnbanChatRoomMember,
     useUpdateChatRoom,
     useUpdateChatRoomBannedWord,
-} from "../../../api/mutations/chat";
+} from "../../../hooks/mutations/chat";
 import {
     addRoomTags,
     finaliseRoomTags,
     isRoomTagCommitKey,
     MAX_ROOM_TAGS,
     removeRoomTag,
-} from "../../../utils/roomTags";
+} from "../../../domain/chat/roomTags";
 import { formatFullDateTime } from "../../../utils/time";
 import styles from "./RoomModerationDialog.module.css";
 
@@ -46,19 +45,6 @@ type PendingConfirm = { kind: "public" } | { kind: "bots"; bots: User[] };
 
 function formatDate(s: string): string {
     return formatFullDateTime(s, "en-GB");
-}
-
-function botsFromError(err: unknown): User[] | null {
-    if (!(err instanceof ApiError) || err.status !== 409) {
-        return null;
-    }
-
-    const body = err.body as BotsWillBeKickedResponse | null;
-    if (!body || body.code !== "bots_will_be_kicked") {
-        return null;
-    }
-
-    return body.bots ?? [];
 }
 
 function botLabel(bot: User): string {
@@ -178,7 +164,7 @@ export function RoomModerationDialog({ isOpen, room, onClose, onSaved }: RoomMod
             onSaved(updated);
             onClose();
         } catch (e) {
-            const bots = botsFromError(e);
+            const bots = readBotsWillBeKicked(e);
             if (bots) {
                 setPendingConfirm({ kind: "bots", bots });
                 return;
@@ -416,7 +402,9 @@ export function RoomModerationDialog({ isOpen, room, onClose, onSaved }: RoomMod
                             <p className={styles.confirmText}>Turning roleplay off removes these bots from the room:</p>
                             <ul className={styles.confirmList}>
                                 {pendingConfirm.bots.map(b => (
-                                    <li key={b.id}>{botLabel(b)}</li>
+                                    <li key={b.id}>
+                                        <bdi>{botLabel(b)}</bdi>
+                                    </li>
                                 ))}
                             </ul>
                             <div className={styles.confirmActions}>
@@ -470,7 +458,11 @@ export function RoomModerationDialog({ isOpen, room, onClose, onSaved }: RoomMod
                                         <ProfileLink user={b.user} size="small" />
                                         <span className={styles.banDate}>{formatDate(b.created_at)}</span>
                                     </div>
-                                    {b.reason && <div className={styles.banReason}>Reason: {b.reason}</div>}
+                                    {b.reason && (
+                                        <div className={styles.banReason}>
+                                            Reason: <bdi>{b.reason}</bdi>
+                                        </div>
+                                    )}
                                     {b.banned_by && (
                                         <div className={styles.banBy}>
                                             By <ProfileLink user={b.banned_by} size="small" />
@@ -571,7 +563,9 @@ export function RoomModerationDialog({ isOpen, room, onClose, onSaved }: RoomMod
                                     className={`${styles.ruleRow}${rule.scope === "global" ? ` ${styles.ruleGlobal}` : ""}`}
                                 >
                                     <div className={styles.ruleMain}>
-                                        <span className={styles.mono}>{rule.pattern}</span>
+                                        <span dir="auto" className={styles.mono}>
+                                            {rule.pattern}
+                                        </span>
                                         <span className={styles.metaPill}>{rule.match_mode}</span>
                                         {rule.case_sensitive && <span className={styles.metaPill}>case-sensitive</span>}
                                         <span

@@ -1,9 +1,8 @@
 import { Link } from "react-router";
-import { useHomeActivity } from "../../api/queries/sidebar";
-import type { HomeActivityEntry, HomeEcho, HomeMember, HomePublicRoom } from "../../types/api";
+import { useHomeActivity } from "../../hooks/queries/sidebar";
+import type { HomeActivityEntry, HomeEcho, HomeMember, HomePublicRoom, Series } from "../../types/api";
 import { useAuth } from "../../hooks/useAuth";
-import { userProgressForSeries } from "../../utils/seriesConfig";
-import type { Series } from "../../api/endpoints";
+import { userProgressForSeries } from "../../domain/series";
 import { Butterfly } from "../../components/Butterfly/Butterfly";
 import { ProfileLink } from "../../components/ProfileLink/ProfileLink";
 import { RelativeTimestamp } from "../../components/RelativeTimestamp/RelativeTimestamp";
@@ -36,7 +35,9 @@ function ActivityRow({ entry }: ActivityRowProps) {
         <li className={styles.activityItem}>
             <Link to={entry.url} className={styles.activityLink}>
                 <span className={styles.activityKind}>{kindLabel[entry.kind]}</span>
-                <span className={styles.activityTitle}>{displayTitle(entry)}</span>
+                <span dir="auto" className={styles.activityTitle}>
+                    {displayTitle(entry)}
+                </span>
             </Link>
             <div className={styles.activityMeta}>
                 <ProfileLink
@@ -79,7 +80,9 @@ function EchoCard({ echoes }: { echoes: HomeEcho[] }) {
             <span className={styles.echoLabel}>An echo, {echo.age}</span>
             <Link to={echo.url} className={styles.echoLink}>
                 <span className={styles.activityKind}>{kindLabel[echo.kind]}</span>
-                <span className={styles.activityTitle}>{displayTitle(echo)}</span>
+                <span dir="auto" className={styles.activityTitle}>
+                    {displayTitle(echo)}
+                </span>
             </Link>
             <div className={styles.activityMeta}>
                 <ProfileLink
@@ -121,8 +124,14 @@ interface RoomCardProps {
 function RoomCard({ room }: RoomCardProps) {
     return (
         <Link to={`/rooms/${room.id}`} className={styles.roomCard}>
-            <span className={styles.roomName}>{room.name || "Untitled room"}</span>
-            {room.description && <span className={styles.roomDescription}>{room.description}</span>}
+            <span dir="auto" className={styles.roomName}>
+                {room.name || "Untitled room"}
+            </span>
+            {room.description && (
+                <span dir="auto" className={styles.roomDescription}>
+                    {room.description}
+                </span>
+            )}
             <span className={styles.roomMembers}>
                 {room.member_count} {room.member_count === 1 ? "witch" : "witches"}
                 {room.last_message_at && (

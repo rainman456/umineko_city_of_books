@@ -11,12 +11,14 @@ import (
 	"umineko_city_of_books/internal/contentfilter"
 	"umineko_city_of_books/internal/credibility"
 	"umineko_city_of_books/internal/dto"
+	"umineko_city_of_books/internal/homefeed"
 	"umineko_city_of_books/internal/logger"
+	"umineko_city_of_books/internal/mention"
 	"umineko_city_of_books/internal/notification"
+	"umineko_city_of_books/internal/og"
 	"umineko_city_of_books/internal/quotefinder"
 	"umineko_city_of_books/internal/repository"
 	"umineko_city_of_books/internal/settings"
-	"umineko_city_of_books/internal/social"
 	"umineko_city_of_books/internal/theory/params"
 
 	"github.com/google/uuid"
@@ -44,10 +46,13 @@ type (
 		authz          authz.Service
 		blockSvc       block.Service
 		notifService   notification.Service
+		mentionSvc     mention.Service
 		settingsSvc    settings.Service
 		credibilitySvc *credibility.Service
 		quoteClient    *quotefinder.Client
 		contentFilter  *contentfilter.Manager
+		ogCache        *og.Resolver
+		echoCache      homefeed.Service
 	}
 )
 
@@ -59,10 +64,13 @@ func NewService(
 	authzService authz.Service,
 	blockSvc block.Service,
 	notifService notification.Service,
+	mentionSvc mention.Service,
 	settingsSvc settings.Service,
 	credibilitySvc *credibility.Service,
 	quoteClient *quotefinder.Client,
 	contentFilter *contentfilter.Manager,
+	ogCache *og.Resolver,
+	echoCache homefeed.Service,
 ) Service {
 	return &service{
 		repo:           repo,
@@ -72,10 +80,29 @@ func NewService(
 		authz:          authzService,
 		blockSvc:       blockSvc,
 		notifService:   notifService,
+		mentionSvc:     mentionSvc,
 		settingsSvc:    settingsSvc,
 		credibilitySvc: credibilitySvc,
 		quoteClient:    quoteClient,
 		contentFilter:  contentFilter,
+		ogCache:        ogCache,
+		echoCache:      echoCache,
+	}
+}
+
+func (s *service) clearPageCache(ctx context.Context, id string) {
+	if s.ogCache != nil {
+		if err := s.ogCache.ClearMetaCache(ctx, og.KindTheory, id); err != nil {
+			logger.Ctx(ctx).Warn().Err(err).Str("theory_id", id).Msg("clear og meta cache failed")
+		}
+	}
+
+	if s.echoCache == nil {
+		return
+	}
+
+	if err := s.echoCache.ClearEchoCache(ctx); err != nil {
+		logger.Ctx(ctx).Warn().Err(err).Msg("clear echo cache failed")
 	}
 }
 
@@ -138,7 +165,7 @@ func (s *service) CreateTheory(ctx context.Context, userID uuid.UUID, req dto.Cr
 		return uuid.Nil, err
 	}
 
-	go social.ProcessMentions(s.userRepo, s.blockSvc, s.notifService, s.settingsSvc, userID, req.Body, created.ID, "theory", fmt.Sprintf("/theory/%s", created.ID))
+	s.mentionSvc.NotifyAsync(ctx, mention.Reference{Kind: mention.KindTheory, EntityID: created.ID}, userID, req.Body)
 
 	go notification.SendFollowerNotification(context.Background(), s.followRepo, s.notifService, notification.FollowerNotifyParams{
 		ActorID:       userID,
@@ -284,6 +311,8 @@ func (s *service) DeleteTheory(ctx context.Context, id uuid.UUID, userID uuid.UU
 		SubjectID:  authorID,
 	})
 
+	s.clearPageCache(ctx, id.String())
+
 	return nil
 }
 
@@ -331,15 +360,21 @@ func (s *service) CreateResponse(ctx context.Context, theoryID uuid.UUID, userID
 		return uuid.Nil, err
 	}
 
+	responseID := created.ID
+
+	s.mentionSvc.NotifyAsync(ctx, mention.Reference{
+		Kind:     mention.KindTheoryResponse,
+		EntityID: theoryID,
+		ChildID:  responseID,
+	}, userID, req.Body)
+
 	go func() {
-		s.resolveEvidenceWeights(ctx, theoryID, created.ID)
+		s.resolveEvidenceWeights(ctx, theoryID, responseID)
 		s.credibilitySvc.Recalculate(ctx, theoryID)
 		if err := s.repo.RecomputeStatus(ctx, theoryID); err != nil {
 			logger.Ctx(ctx).Warn().Err(err).Str("theory_id", theoryID.String()).Msg("recompute theory status failed")
 		}
 	}()
-
-	go social.ProcessMentions(s.userRepo, s.blockSvc, s.notifService, s.settingsSvc, userID, req.Body, theoryID, fmt.Sprintf("theory_response:%s", created.ID), fmt.Sprintf("/theory/%s#response-%s", theoryID, created.ID))
 
 	go func() {
 		title, _ := s.repo.GetTheoryTitle(ctx, theoryID)
@@ -352,7 +387,7 @@ func (s *service) CreateResponse(ctx context.Context, theoryID uuid.UUID, userID
 			EmailActor:    s.actorName(ctx, userID),
 			EmailAction:   "responded to your theory",
 			EmailTitle:    title,
-			EmailLink:     fmt.Sprintf("/theory/%s#response-%s", theoryID, created.ID),
+			EmailLink:     fmt.Sprintf("/theory/%s#response-%s", theoryID, responseID),
 		}); err != nil {
 			logger.Ctx(ctx).Warn().Err(err).Msg("notify theory response failed")
 		}
@@ -374,14 +409,14 @@ func (s *service) CreateResponse(ctx context.Context, theoryID uuid.UUID, userID
 				EmailActor:    s.actorName(ctx, userID),
 				EmailAction:   "replied to your response",
 				EmailTitle:    title,
-				EmailLink:     fmt.Sprintf("/theory/%s#response-%s", theoryID, created.ID),
+				EmailLink:     fmt.Sprintf("/theory/%s#response-%s", theoryID, responseID),
 			}); err != nil {
 				logger.Ctx(ctx).Warn().Err(err).Msg("notify response reply failed")
 			}
 		}()
 	}
 
-	return created.ID, nil
+	return responseID, nil
 }
 
 func (s *service) resolveEvidenceWeights(ctx context.Context, theoryID uuid.UUID, responseID uuid.UUID) {

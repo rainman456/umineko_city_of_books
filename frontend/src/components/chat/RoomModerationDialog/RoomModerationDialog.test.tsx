@@ -9,7 +9,7 @@ import type {
     UpdateGroupRoomRequest,
     User,
 } from "../../../types/api";
-import { ApiError } from "../../../api/client";
+import { makeChatRoom } from "../../../test-utils/fixtures";
 import { renderWithProviders } from "../../../test-utils/render";
 import { RoomModerationDialog } from "./RoomModerationDialog";
 
@@ -32,13 +32,14 @@ const {
     useUpdateChatRoom: vi.fn(),
 }));
 
-vi.mock("../../../api/queries/chat", () => ({ useChatRoomBans, useChatRoomBannedWords }));
-vi.mock("../../../api/mutations/chat", () => ({
+vi.mock("../../../hooks/queries/chat", () => ({ useChatRoomBans, useChatRoomBannedWords }));
+vi.mock("../../../hooks/mutations/chat", () => ({
     useUnbanChatRoomMember,
     useCreateChatRoomBannedWord,
     useUpdateChatRoomBannedWord,
     useDeleteChatRoomBannedWord,
     useUpdateChatRoom,
+    readBotsWillBeKicked: (err: unknown) => (err as { bots?: User[] }).bots ?? null,
 }));
 
 const roomId = "room-1";
@@ -78,24 +79,7 @@ function makeBan(overrides: Partial<ChatRoomBan> = {}): ChatRoomBan {
 }
 
 function makeRoom(overrides: Partial<ChatRoom> = {}): ChatRoom {
-    return {
-        id: roomId,
-        name: "Golden Land",
-        description: "a place for tea",
-        type: "group",
-        is_public: true,
-        is_rp: false,
-        is_system: false,
-        tags: [],
-        viewer_muted: false,
-        viewer_ghost: false,
-        is_member: true,
-        member_count: 2,
-        hot_score: 0,
-        members: [],
-        created_at: "2026-01-01T00:00:00Z",
-        ...overrides,
-    };
+    return makeChatRoom({ id: roomId, name: "Golden Land", description: "a place for tea", ...overrides });
 }
 
 function makeRule(overrides: Partial<BannedWordRule> = {}): BannedWordRule {
@@ -159,12 +143,8 @@ async function openRoomTab(user: ReturnType<typeof userEvent.setup>) {
     await user.click(screen.getByRole("button", { name: "Room" }));
 }
 
-function botsError(bots: User[]): ApiError {
-    return new ApiError(409, "turning roleplay off will remove 2 bots from this room", {
-        error: "turning roleplay off will remove 2 bots from this room",
-        code: "bots_will_be_kicked",
-        bots,
-    });
+function botsError(bots: User[]): Error {
+    return Object.assign(new Error("turning roleplay off will remove 2 bots from this room"), { bots });
 }
 
 async function openWordsTab(user: ReturnType<typeof userEvent.setup>) {
@@ -253,7 +233,7 @@ describe("RoomModerationDialog", () => {
 
         // then
         expect(screen.getByText("Beatrice")).toBeInTheDocument();
-        expect(screen.getByText(/Reason: endless spam/)).toBeInTheDocument();
+        expect(screen.getByText(/Reason:/)).toHaveTextContent("Reason: endless spam");
         expect(screen.getByText("Ronove")).toBeInTheDocument();
     });
 

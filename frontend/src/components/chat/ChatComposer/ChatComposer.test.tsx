@@ -1,10 +1,10 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError } from "../../../api/client";
-import type { SiteInfo } from "../../../api/endpoints";
+import { makeChatMessage } from "../../../test-utils/fixtures";
 import { renderWithProviders } from "../../../test-utils/render";
-import type { ChatMessage, ChatRoom } from "../../../types/api";
+import type { ChatMessage, ChatRoom, SiteInfo } from "../../../types/api";
+import type { BannedWordRejection, ChatSendRejection } from "../../../hooks/mutations/chat";
 import { ChatComposer } from "./ChatComposer";
 
 const mocks = vi.hoisted(() => ({
@@ -12,10 +12,17 @@ const mocks = vi.hoisted(() => ({
     sendFirstDM: vi.fn(),
 }));
 
-vi.mock("../../../api/mutations/chat", () => ({
+vi.mock("../../../hooks/mutations/chat", () => ({
     useSendChatMessage: () => ({ mutateAsync: mocks.sendChatMessage }),
     useSendFirstDMMessage: () => ({ mutateAsync: mocks.sendFirstDM }),
+    readChatSendRejection: (err: unknown) => (err as { rejection?: ChatSendRejection }).rejection ?? null,
 }));
+
+function rejected(bannedWord: BannedWordRejection | null, serverMessage: string | null = null): Error {
+    const rejection: ChatSendRejection = { bannedWord, serverMessage };
+
+    return Object.assign(new Error("blocked"), { rejection });
+}
 
 vi.mock("../GifPicker/GifPicker", () => ({
     GifPicker: ({ onPick, onClose }: { onPick: (gif: { id: string; url: string }) => void; onClose: () => void }) => (
@@ -29,20 +36,6 @@ vi.mock("../GifPicker/GifPicker", () => ({
 }));
 
 const ENTER_PLACEHOLDER = "Type a message... (Enter to send, Shift+Enter for newline)";
-
-function makeMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
-    return {
-        id: "m1",
-        room_id: "room-1",
-        sender: { id: "u1", username: "beatrice", display_name: "Beatrice" },
-        body: "the golden truth",
-        is_system: false,
-        created_at: "2026-01-01T00:00:00Z",
-        pinned: false,
-        reactions: [],
-        ...overrides,
-    };
-}
 
 interface ComposerOptions {
     roomId?: string | null;
@@ -78,8 +71,8 @@ function renderComposer(options: ComposerOptions = {}) {
 
 describe("ChatComposer", () => {
     beforeEach(() => {
-        mocks.sendChatMessage.mockResolvedValue(makeMessage());
-        mocks.sendFirstDM.mockResolvedValue({ message: makeMessage(), room: { id: "room-9" } });
+        mocks.sendChatMessage.mockResolvedValue(makeChatMessage());
+        mocks.sendFirstDM.mockResolvedValue({ message: makeChatMessage(), room: { id: "room-9" } });
     });
 
     it("keeps the send control disabled until there is something to send", async () => {
@@ -125,7 +118,7 @@ describe("ChatComposer", () => {
             reply_to_id: undefined,
             files: [],
         });
-        expect(onSent).toHaveBeenCalledWith(makeMessage());
+        expect(onSent).toHaveBeenCalledWith(makeChatMessage());
     });
 
     it("clears the composer once the message has been accepted", async () => {
@@ -209,7 +202,7 @@ describe("ChatComposer", () => {
         await user.click(screen.getByRole("button", { name: "Cancel reply" }));
 
         // then
-        expect(screen.getByText("Replying to Battler")).toBeInTheDocument();
+        expect(screen.getByText(/Replying to/)).toHaveTextContent("Replying to Battler");
         expect(screen.getByText("an earlier claim")).toBeInTheDocument();
         expect(onCancelReply).toHaveBeenCalledOnce();
     });
@@ -231,7 +224,7 @@ describe("ChatComposer", () => {
             body: "are you there",
             files: [],
         });
-        expect(onSent).toHaveBeenCalledWith(makeMessage(), { id: "room-9" });
+        expect(onSent).toHaveBeenCalledWith(makeChatMessage(), { id: "room-9" });
         expect(mocks.sendChatMessage).not.toHaveBeenCalled();
     });
 
@@ -297,9 +290,7 @@ describe("ChatComposer", () => {
     it("explains a banned word rejection including the kick", async () => {
         // given
         const user = userEvent.setup();
-        mocks.sendChatMessage.mockRejectedValue(
-            new ApiError(422, "blocked", { code: "banned_word", pattern: "goats", action: "kick" }),
-        );
+        mocks.sendChatMessage.mockRejectedValue(rejected({ pattern: "goats", kicked: true }));
         renderComposer();
 
         // when
@@ -317,9 +308,7 @@ describe("ChatComposer", () => {
     it("omits the kick notice when the rule only blocks the message", async () => {
         // given
         const user = userEvent.setup();
-        mocks.sendChatMessage.mockRejectedValue(
-            new ApiError(422, "blocked", { code: "banned_word", pattern: "goats" }),
-        );
+        mocks.sendChatMessage.mockRejectedValue(rejected({ pattern: "goats", kicked: false }));
         renderComposer();
 
         // when
@@ -333,7 +322,7 @@ describe("ChatComposer", () => {
     it("surfaces the error field the server returned", async () => {
         // given
         const user = userEvent.setup();
-        mocks.sendChatMessage.mockRejectedValue(new ApiError(403, "nope", { error: "You are muted in this room" }));
+        mocks.sendChatMessage.mockRejectedValue(rejected(null, "You are muted in this room"));
         renderComposer();
 
         // when

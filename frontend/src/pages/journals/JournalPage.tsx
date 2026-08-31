@@ -1,39 +1,37 @@
+import { useState, type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
-import { useQueryClient } from "@tanstack/react-query";
-import type { JournalDetail, PostComment } from "../../types/api";
-import { useJournal } from "../../api/queries/journal";
-import { queryKeys } from "../../api/queryKeys";
+import { useJournal } from "../../hooks/queries/journal";
 import {
-    useCreateJournalComment,
     useDeleteJournal,
-    useDeleteJournalComment,
     useFollowJournal,
     useSetJournalPaused,
-    useLikeJournalComment,
     useUnfollowJournal,
-    useUnlikeJournalComment,
-    useUpdateJournalComment,
-    useUploadJournalCommentMedia,
-} from "../../api/mutations/journal";
+} from "../../hooks/mutations/journal";
 import { useAuth } from "../../hooks/useAuth";
+import { useCommentHandlers } from "../../hooks/useCommentHandlers";
 import { usePageTitle } from "../../hooks/usePageTitle";
 import { useScrollToHash } from "../../hooks/useScrollToHash";
-import { can } from "../../utils/permissions";
+import { contentPermissions, isContentOwner, type ContentSubject } from "../../domain/contentPermissions";
+import { errorMessage } from "../../utils/errorMessage";
 import { ProfileLink } from "../../components/ProfileLink/ProfileLink";
 import { Button } from "../../components/Button/Button";
 import { CommentsSection } from "../../components/post/CommentsSection/CommentsSection";
 import { ReportButton } from "../../components/ReportButton/ReportButton";
-import { renderRich } from "../../utils/richText";
+import { renderRich } from "../../components/richText/richText";
 import { extractGif } from "../../utils/gif";
-import { workLabel } from "../../utils/journalWorks";
+import { workLabel } from "../../domain/journal";
 import { GifEmbed } from "../../components/GifEmbed/GifEmbed";
 import { MediaGallery } from "../../components/post/MediaGallery/MediaGallery";
 import { RelativeTimestamp } from "../../components/RelativeTimestamp/RelativeTimestamp";
 import styles from "./JournalPage.module.css";
 
-function entryHeading(number: number, title?: string | null): string {
+function entryHeading(number: number, title?: string | null): ReactNode {
     if (title && title.trim() !== "") {
-        return `Entry ${number}: ${title}`;
+        return (
+            <>
+                Entry {number}: <bdi>{title}</bdi>
+            </>
+        );
     }
     return `Entry ${number}`;
 }
@@ -43,9 +41,9 @@ export function JournalPage() {
     const navigate = useNavigate();
     const location = useLocation();
     const { user } = useAuth();
-    const qc = useQueryClient();
     const { journal, loading, refresh } = useJournal(id ?? "");
     const following = journal?.is_following ?? false;
+    const [deleteError, setDeleteError] = useState("");
     usePageTitle(journal?.title ?? "Journal");
 
     const hash = location.hash;
@@ -55,55 +53,50 @@ export function JournalPage() {
     const unfollowMutation = useUnfollowJournal();
     const deleteJournalMutation = useDeleteJournal();
     const setPausedMutation = useSetJournalPaused();
-    const createCommentMutation = useCreateJournalComment(id ?? "");
-    const updateCommentMutation = useUpdateJournalComment(id ?? "");
-    const deleteCommentMutation = useDeleteJournalComment(id ?? "");
-    const likeCommentMutation = useLikeJournalComment(id ?? "");
-    const unlikeCommentMutation = useUnlikeJournalComment(id ?? "");
-    const uploadMediaMutation = useUploadJournalCommentMedia(id ?? "");
+    const { createCommentFn, updateFn, deleteFn, likeFn, unlikeFn, uploadMediaFn } = useCommentHandlers(
+        "journal",
+        id ?? "",
+        { enabled: ["create", "update", "delete", "like", "unlike", "uploadMedia"] },
+    );
 
     useScrollToHash(!loading && !!journal, highlightedComment ? `comment-${highlightedComment}` : null);
 
-    async function handleFollow() {
+    function handleFollow() {
         if (!journal || !id) {
             return;
         }
-        const wasFollowing = following;
-        const journalKey = queryKeys.journal.detail(id);
-        qc.setQueryData<JournalDetail>(journalKey, prev => (prev ? { ...prev, is_following: !wasFollowing } : prev));
-        try {
-            if (wasFollowing) {
-                await unfollowMutation.mutateAsync(id);
-            } else {
-                await followMutation.mutateAsync(id);
-            }
-        } catch {
-            qc.setQueryData<JournalDetail>(journalKey, prev => (prev ? { ...prev, is_following: wasFollowing } : prev));
+
+        if (following) {
+            unfollowMutation.mutate(id);
+            return;
         }
+
+        followMutation.mutate(id);
     }
 
-    async function handleTogglePause() {
+    function handleTogglePause() {
         if (!journal || !id) {
             return;
         }
-        const wasPaused = journal.is_paused;
-        const journalKey = queryKeys.journal.detail(id);
-        qc.setQueryData<JournalDetail>(journalKey, prev => (prev ? { ...prev, is_paused: !wasPaused } : prev));
-        try {
-            await setPausedMutation.mutateAsync({ id, paused: !wasPaused });
-        } catch {
-            qc.setQueryData<JournalDetail>(journalKey, prev => (prev ? { ...prev, is_paused: wasPaused } : prev));
-        }
+
+        setPausedMutation.mutate({ id, paused: !journal.is_paused });
     }
 
     async function handleDelete() {
         if (!id || !window.confirm("Delete this journal? This cannot be undone.")) {
             return;
         }
+
+        setDeleteError("");
+
         try {
             await deleteJournalMutation.mutateAsync(id);
-            navigate("/journals");
-        } catch {}
+        } catch (e) {
+            setDeleteError(errorMessage(e, "Could not delete this journal."));
+            return;
+        }
+
+        navigate("/journals");
     }
 
     if (loading) {
@@ -114,22 +107,13 @@ export function JournalPage() {
         return <div className="empty-state">Journal not found.</div>;
     }
 
-    const isOwner = user?.id === journal.author.id;
-    const canEdit = isOwner || can(user, "edit_any_journal");
-    const canDelete = isOwner || can(user, "delete_any_journal");
+    const subject: ContentSubject = { family: "journal", authorId: journal.author.id };
+    const isOwner = isContentOwner(user, subject);
+    const { canEdit, canDelete } = contentPermissions(user, subject);
     const comments = journal.comments ?? [];
     const canComment = user && !journal.is_archived;
     const entries = journal.entries ?? [];
     const latestEntry = journal.latest_entry;
-
-    const likeFn = (commentId: string) => likeCommentMutation.mutateAsync(commentId);
-    const unlikeFn = (commentId: string) => unlikeCommentMutation.mutateAsync(commentId);
-    const deleteFn = (commentId: string) => deleteCommentMutation.mutateAsync(commentId);
-    const updateFn = (commentId: string, body: string) =>
-        updateCommentMutation.mutateAsync({ id: commentId, body }).then(() => undefined);
-    const createCommentFn = (_postId: string, body: string, parentId?: string) =>
-        createCommentMutation.mutateAsync({ body, parentId });
-    const uploadMediaFn = (commentId: string, file: File) => uploadMediaMutation.mutateAsync({ commentId, file });
 
     return (
         <div className={styles.page}>
@@ -139,7 +123,9 @@ export function JournalPage() {
 
             <div className={styles.detail}>
                 <div className={styles.header}>
-                    <h1 className={styles.title}>{journal.title}</h1>
+                    <h1 dir="auto" className={styles.title}>
+                        {journal.title}
+                    </h1>
                     <span className={styles.work}>{workLabel(journal.work)}</span>
                     {journal.is_archived && <span className={styles.archived}>Archived</span>}
                     {!journal.is_archived && journal.is_paused && <span className={styles.archived}>Paused</span>}
@@ -179,6 +165,12 @@ export function JournalPage() {
                     {user && !isOwner && <ReportButton targetType="journal" targetId={journal.id} />}
                 </div>
 
+                {deleteError && (
+                    <div role="alert" className={styles.error}>
+                        {deleteError}
+                    </div>
+                )}
+
                 {journal.is_archived && (
                     <div className={styles.archivedBanner}>
                         This journal was archived after 7 days of inactivity. New comments are disabled.
@@ -199,7 +191,7 @@ export function JournalPage() {
                         <span className={styles.spotlightTag}>Latest update</span>
                         <RelativeTimestamp value={latestEntry.created_at} className={styles.spotlightWhen} />
                     </div>
-                    <h2 className={styles.spotlightTitle}>
+                    <h2 dir="auto" className={styles.spotlightTitle}>
                         <Link to={`/journals/${journal.id}/entry/${latestEntry.entry_number}`}>
                             {entryHeading(latestEntry.entry_number, latestEntry.title)}
                         </Link>
@@ -209,7 +201,11 @@ export function JournalPage() {
                         if (gifURL) {
                             return <GifEmbed src={gifURL} />;
                         }
-                        return <div className={styles.spotlightBody}>{renderRich(latestEntry.body)}</div>;
+                        return (
+                            <div dir="auto" className={styles.spotlightBody}>
+                                {renderRich(latestEntry.body)}
+                            </div>
+                        );
                     })()}
                     {latestEntry.media.length > 0 && <MediaGallery media={latestEntry.media} />}
                     <div className={styles.spotlightFooter}>
@@ -250,7 +246,9 @@ export function JournalPage() {
                                     className={styles.tocItemLink}
                                 >
                                     <span className={styles.tocItemNumber}>#{e.entry_number}</span>
-                                    <span className={styles.tocItemTitle}>{entryHeading(e.entry_number, e.title)}</span>
+                                    <span dir="auto" className={styles.tocItemTitle}>
+                                        {entryHeading(e.entry_number, e.title)}
+                                    </span>
                                     {e.is_draft && <span className={styles.draftBadge}>Draft</span>}
                                     <span className={styles.tocItemMeta}>
                                         {e.word_count} words {"·"} <RelativeTimestamp value={e.created_at} />
@@ -263,7 +261,7 @@ export function JournalPage() {
             </div>
 
             <CommentsSection
-                comments={comments as unknown as PostComment[]}
+                comments={comments}
                 targetId={journal.id}
                 user={canComment ? user : null}
                 onChanged={() => refresh()}

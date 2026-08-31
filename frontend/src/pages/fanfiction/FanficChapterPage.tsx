@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useNavigate, useParams } from "react-router";
 import DOMPurify from "dompurify";
 import { usePageTitle } from "../../hooks/usePageTitle";
-import { useFanfic, useFanficChapter } from "../../api/queries/fanfic";
+import { useFanfic, useFanficChapter } from "../../hooks/queries/fanfic";
 import { Button } from "../../components/Button/Button";
 import styles from "./FanficPages.module.css";
 
@@ -36,7 +36,13 @@ export function FanficChapterPage() {
     }
 
     const isOneshot = fanfic.is_oneshot;
-    const title = isOneshot ? fanfic.title : `Chapter ${chapter.chapter_number}: ${chapter.title}`;
+    const title = isOneshot ? (
+        fanfic.title
+    ) : (
+        <>
+            Chapter {chapter.chapter_number}: <bdi>{chapter.title}</bdi>
+        </>
+    );
 
     function navButtons() {
         return (
@@ -70,14 +76,16 @@ export function FanficChapterPage() {
     return (
         <div className={styles.chapterPage}>
             <span className={styles.back} onClick={() => navigate(`/fanfiction/${fanficId}`)}>
-                &larr; Back to {fanfic.title}
+                &larr; Back to <bdi>{fanfic.title}</bdi>
             </span>
 
-            <h1 className={styles.chapterTitle}>{title}</h1>
+            <h1 dir="auto" className={styles.chapterTitle}>
+                {title}
+            </h1>
 
             {!isOneshot && navButtons()}
 
-            <div className={styles.chapterBody} dangerouslySetInnerHTML={{ __html: safeBody }} />
+            <div dir="auto" className={styles.chapterBody} dangerouslySetInnerHTML={{ __html: safeBody }} />
 
             <p className={styles.cardStats} style={{ marginTop: "1.5rem" }}>
                 {formatNumber(chapter.word_count)} words

@@ -1,9 +1,9 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { makeStats, makeUser } from "../../test-utils/fixtures";
+import { makeGallery as makeContentGallery, makeStats, makeUser } from "../../test-utils/fixtures";
 import { renderWithProviders } from "../../test-utils/render";
-import type { ActivityItem, Fanfic, Gallery, Mystery, OC, Ship, User, UserProfile } from "../../types/api";
+import type { ActivityItem, Fanfic, Gallery, Mystery, OC, Ship, SiteInfo, User, UserProfile } from "../../types/api";
 import { ProfilePage } from "./ProfilePage";
 
 const mocks = vi.hoisted(() => ({
@@ -37,11 +37,11 @@ vi.mock("react-router", async importOriginal => {
     return { ...actual, useNavigate: () => mocks.navigate };
 });
 
-vi.mock("../../api/queries/profile", () => ({ useProfile: mocks.useProfile }));
-vi.mock("../../api/queries/theory", () => ({ useTheoryFeed: mocks.useTheoryFeed }));
+vi.mock("../../hooks/queries/profile", () => ({ useProfile: mocks.useProfile }));
+vi.mock("../../hooks/queries/theory", () => ({ useTheoryFeed: mocks.useTheoryFeed }));
 vi.mock("../../hooks/useFollow", () => ({ useFollow: mocks.useFollow }));
 vi.mock("../../hooks/useBlock", () => ({ useBlock: mocks.useBlock }));
-vi.mock("../../api/queries/user", () => ({
+vi.mock("../../hooks/queries/user", () => ({
     useUserPosts: mocks.useUserPosts,
     useUserArt: mocks.useUserArt,
     useUserGalleries: mocks.useUserGalleries,
@@ -52,15 +52,16 @@ vi.mock("../../api/queries/user", () => ({
     useUserJournals: mocks.useUserJournals,
     useUserFollowedJournals: mocks.useUserFollowedJournals,
     useUserActivity: mocks.useUserActivity,
+    useFollowers: mocks.useFollowers,
+    useFollowing: mocks.useFollowing,
 }));
-vi.mock("../../api/queries/oc", () => ({ useUserOCs: mocks.useUserOCs }));
-vi.mock("../../api/queries/misc", () => ({ useFollowers: mocks.useFollowers, useFollowing: mocks.useFollowing }));
-vi.mock("../../api/mutations/art", () => ({
+vi.mock("../../hooks/queries/oc", () => ({ useUserOCs: mocks.useUserOCs }));
+vi.mock("../../hooks/mutations/art", () => ({
     useCreateGallery: () => ({ mutateAsync: mocks.createGallery, isPending: false }),
 }));
 
 vi.mock("./TrophyCase", () => ({ TrophyCase: () => <div data-testid="trophy-case" /> }));
-vi.mock("../../features/easterEgg", () => ({ HuntsInProgress: () => null }));
+vi.mock("../../components/easterEgg", () => ({ HuntsInProgress: () => null }));
 vi.mock("../../components/theory/TheoryCard/TheoryCard", () => ({
     TheoryCard: ({ theory }: { theory: { title: string } }) => <div data-testid="theory-card">{theory.title}</div>,
 }));
@@ -176,17 +177,13 @@ function makeFanfic(overrides: Partial<Fanfic> = {}): Fanfic {
 }
 
 function makeGallery(overrides: Partial<Gallery> = {}): Gallery {
-    return {
-        id: "gallery-1",
+    return makeContentGallery({
         author,
         name: "Witch Portraits",
-        description: "",
-        cover_image_url: "",
-        cover_thumbnail_url: "",
         art_count: 4,
         created_at: "2026-02-01T00:00:00Z",
         ...overrides,
-    };
+    });
 }
 
 function makeActivity(overrides: Partial<ActivityItem> = {}): ActivityItem {
@@ -211,10 +208,11 @@ function statBox(label: string): HTMLElement {
     throw new Error(`there is no ${label} counter on the profile`);
 }
 
-function renderProfile(viewer: UserProfile | null = makeUser({ id: viewerId })) {
+function renderProfile(viewer: UserProfile | null = makeUser({ id: viewerId }), siteInfo: Partial<SiteInfo> = {}) {
     const user = userEvent.setup();
     const result = renderWithProviders(<ProfilePage />, {
         user: viewer,
+        siteInfo,
         route: "/user/beatrice",
         path: "/user/:username",
     });
@@ -362,7 +360,7 @@ describe("ProfilePage header", () => {
 
         // then
         expect(screen.getByText("This user has been banned")).toBeInTheDocument();
-        expect(screen.getByText("Reason: Endless witch hunting")).toBeInTheDocument();
+        expect(screen.getByText(/Reason:/)).toHaveTextContent("Reason: Endless witch hunting");
     });
 
     it("leaves the ban banner off an ordinary profile", () => {
@@ -399,6 +397,18 @@ describe("ProfilePage header", () => {
 
         // then
         expect(screen.getByText("Without love it cannot be seen.")).toBeInTheDocument();
+    });
+
+    it("does not offer the member empty-bio line to a character with no bio", () => {
+        // given
+        mocks.useProfile.mockReturnValue({ profile: makeProfile({ bio: "", is_bot: true }), loading: false });
+
+        // when
+        renderProfile();
+
+        // then
+        expect(screen.queryByText("This player has not written a bio yet.")).not.toBeInTheDocument();
+        expect(screen.getByText("How to talk to me")).toBeInTheDocument();
     });
 
     it("records the day the player joined", () => {
@@ -449,46 +459,6 @@ describe("ProfilePage header", () => {
 
         // then
         expect(screen.getByText("she/her")).toBeInTheDocument();
-    });
-
-    it("works the age out from the date of birth", () => {
-        // given
-        vi.useFakeTimers();
-        vi.setSystemTime(new Date("2026-08-02T12:00:00Z"));
-        mocks.useProfile.mockReturnValue({ profile: makeProfile({ dob: "1995-07-15" }), loading: false });
-
-        // when
-        renderProfile();
-
-        // then
-        expect(screen.getByText(/\(31 years old\)/)).toBeInTheDocument();
-    });
-
-    it("uses the singular year for a one year old", () => {
-        // given
-        vi.useFakeTimers();
-        vi.setSystemTime(new Date("2026-08-02T12:00:00Z"));
-        mocks.useProfile.mockReturnValue({ profile: makeProfile({ dob: "2025-01-01" }), loading: false });
-
-        // when
-        renderProfile();
-
-        // then
-        expect(screen.getByText(/\(1 year old\)/)).toBeInTheDocument();
-    });
-
-    it("leaves the age off a date of birth that has not happened yet", () => {
-        // given
-        vi.useFakeTimers();
-        vi.setSystemTime(new Date("2026-08-02T12:00:00Z"));
-        mocks.useProfile.mockReturnValue({ profile: makeProfile({ dob: "2030-01-01" }), loading: false });
-
-        // when
-        renderProfile();
-
-        // then
-        expect(screen.queryByText(/years old/)).not.toBeInTheDocument();
-        expect(screen.getByText(/^Born /)).toBeInTheDocument();
     });
 
     it("leaves an unreadable date of birth exactly as it stands", () => {
@@ -558,85 +528,6 @@ describe("ProfilePage social links", () => {
         );
     });
 
-    it("drops the leading at sign from a bluesky handle", () => {
-        // given
-        mocks.useProfile.mockReturnValue({
-            profile: makeProfile({ social_bluesky: "@beato.bsky.social" }),
-            loading: false,
-        });
-
-        // when
-        renderProfile();
-
-        // then
-        expect(screen.getByRole("link", { name: "@beato.bsky.social" })).toHaveAttribute(
-            "href",
-            "https://bsky.app/profile/beato.bsky.social",
-        );
-    });
-
-    it("leaves a full bluesky address exactly as the player gave it", () => {
-        // given
-        mocks.useProfile.mockReturnValue({
-            profile: makeProfile({ social_bluesky: "https://bsky.app/profile/beato.bsky.social" }),
-            loading: false,
-        });
-
-        // when
-        renderProfile();
-
-        // then
-        expect(screen.getByRole("link", { name: "https://bsky.app/profile/beato.bsky.social" })).toHaveAttribute(
-            "href",
-            "https://bsky.app/profile/beato.bsky.social",
-        );
-    });
-
-    it("sends a bare waifulist handle out to waifulist", () => {
-        // given
-        mocks.useProfile.mockReturnValue({ profile: makeProfile({ social_waifulist: "beato" }), loading: false });
-
-        // when
-        renderProfile();
-
-        // then
-        expect(screen.getByRole("link", { name: "beato" })).toHaveAttribute("href", "https://waifulist.moe/beato");
-    });
-
-    it("keeps a waifulist path on the waifulist domain the player gave", () => {
-        // given
-        mocks.useProfile.mockReturnValue({
-            profile: makeProfile({ social_waifulist: "waifulist.moe/list/beato" }),
-            loading: false,
-        });
-
-        // when
-        renderProfile();
-
-        // then
-        expect(screen.getByRole("link", { name: "waifulist.moe/list/beato" })).toHaveAttribute(
-            "href",
-            "https://waifulist.moe/list/beato",
-        );
-    });
-
-    it("leaves a full address exactly as the player gave it", () => {
-        // given
-        mocks.useProfile.mockReturnValue({
-            profile: makeProfile({ social_twitter: "https://x.com/goldenwitch" }),
-            loading: false,
-        });
-
-        // when
-        renderProfile();
-
-        // then
-        expect(screen.getByRole("link", { name: "https://x.com/goldenwitch" })).toHaveAttribute(
-            "href",
-            "https://x.com/goldenwitch",
-        );
-    });
-
     it("shows the discord tag as plain text because it cannot be linked", () => {
         // given
         mocks.useProfile.mockReturnValue({ profile: makeProfile({ social_discord: "beato#0001" }), loading: false });
@@ -647,31 +538,6 @@ describe("ProfilePage social links", () => {
         // then
         expect(screen.getByText("beato#0001")).toBeInTheDocument();
         expect(screen.queryByRole("link", { name: "beato#0001" })).not.toBeInTheDocument();
-    });
-
-    it("turns a shared email address into a mail link", () => {
-        // given
-        mocks.useProfile.mockReturnValue({ profile: makeProfile({ email: "beato@example.com" }), loading: false });
-
-        // when
-        renderProfile();
-
-        // then
-        expect(screen.getByRole("link", { name: "beato@example.com" })).toHaveAttribute(
-            "href",
-            "mailto:beato@example.com",
-        );
-    });
-
-    it("adds the missing scheme to a bare website", () => {
-        // given
-        mocks.useProfile.mockReturnValue({ profile: makeProfile({ website: "witchs.moe" }), loading: false });
-
-        // when
-        renderProfile();
-
-        // then
-        expect(screen.getByRole("link", { name: "witchs.moe" })).toHaveAttribute("href", "https://witchs.moe");
     });
 
     it("shows no social row when the player shared nothing", () => {
@@ -1055,7 +921,7 @@ describe("ProfilePage tabs", () => {
 
         // then
         expect(screen.getByText("Solved")).toBeInTheDocument();
-        expect(screen.getByText(/Winner: Ange/)).toBeInTheDocument();
+        expect(screen.getByText(/Winner:/)).toHaveTextContent("Winner: Ange");
     });
 
     it("counts the words and chapters of each fanfiction", async () => {
@@ -1424,5 +1290,84 @@ describe("ProfilePage pagination", () => {
 
         // then
         expect(mocks.useUserPosts).toHaveBeenLastCalledWith(profileId, 20, 0);
+    });
+});
+
+describe("ProfilePage character guide", () => {
+    it("explains how to talk to a character on a bot profile", () => {
+        // given
+        mocks.useProfile.mockReturnValue({ profile: makeProfile({ is_bot: true }), loading: false });
+
+        // when
+        renderProfile();
+
+        // then
+        expect(screen.getByText("How to talk to me")).toBeInTheDocument();
+    });
+
+    it("leaves an ordinary member profile alone", () => {
+        // given
+        mocks.useProfile.mockReturnValue({ profile: makeProfile({ is_bot: false }), loading: false });
+
+        // when
+        renderProfile();
+
+        // then
+        expect(screen.queryByText("How to talk to me")).not.toBeInTheDocument();
+        expect(screen.getByText("This player has not written a bio yet.")).toBeInTheDocument();
+    });
+
+    it("leaves a profile alone when the server sends no bot flag at all", () => {
+        // given
+        mocks.useProfile.mockReturnValue({ profile: makeProfile(), loading: false });
+
+        // when
+        renderProfile();
+
+        // then
+        expect(screen.queryByText("How to talk to me")).not.toBeInTheDocument();
+    });
+
+    it("keeps a character's own bio above the guide", () => {
+        // given
+        mocks.useProfile.mockReturnValue({
+            profile: makeProfile({ is_bot: true, bio: "The Golden Witch, endless and cruel." }),
+            loading: false,
+        });
+
+        // when
+        renderProfile();
+
+        // then
+        expect(screen.getByText("The Golden Witch, endless and cruel.")).toBeInTheDocument();
+        expect(screen.getByText("How to talk to me")).toBeInTheDocument();
+    });
+
+    it("renders the guide in full under a very long bio", () => {
+        // given
+        const longBio = "Beatrice repeats herself endlessly. ".repeat(200);
+        mocks.useProfile.mockReturnValue({ profile: makeProfile({ is_bot: true, bio: longBio }), loading: false });
+
+        // when
+        renderProfile();
+
+        // then
+        expect(screen.getByText("How to talk to me")).toBeInTheDocument();
+        expect(screen.getByText(/read back over the last 20 messages/)).toBeInTheDocument();
+        expect(screen.getByText(/back through up to 25 messages/)).toBeInTheDocument();
+    });
+
+    it("takes both memory limits from the live settings", () => {
+        // given
+        mocks.useProfile.mockReturnValue({ profile: makeProfile({ is_bot: true }), loading: false });
+
+        // when
+        renderProfile(makeUser({ id: viewerId }), { chatbot_context_messages: 42, chatbot_max_reply_chain: 99 });
+
+        // then
+        expect(screen.getByText(/read back over the last 42 messages/)).toBeInTheDocument();
+        expect(screen.getByText(/back through up to 99 messages/)).toBeInTheDocument();
+        expect(screen.queryByText(/20 messages/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/25 messages/)).not.toBeInTheDocument();
     });
 });

@@ -4,11 +4,12 @@ import {
     useOfferDraw,
     useResignGame,
     useSubmitGameAction,
-} from "../../api/mutations/gameRoom";
+} from "../../hooks/mutations/gameRoom";
 import { ChessBoardView } from "../../components/games/chess/ChessBoardView";
+import type { ChessState, ChessStats } from "../../types/api";
 import { GameRoomShell, type GameBoardProps } from "./GameRoomShell";
 
-function ChessBoard({ room, viewer, isSpectator }: GameBoardProps) {
+function ChessBoard({ room, viewer, isSpectator }: GameBoardProps<ChessState, ChessStats>) {
     const submitAction = useSubmitGameAction(room.id);
     const resign = useResignGame();
     const offerDraw = useOfferDraw();
@@ -49,7 +50,11 @@ export function ChessGamePage() {
     return (
         <GameRoomShell
             gameName="Chess"
-            inviteCopy={name => `${name} has invited you to a chess game. Accept to start - you will play as black.`}
+            inviteCopy={name => (
+                <>
+                    <bdi>{name}</bdi> has invited you to a chess game. Accept to start - you will play as black.
+                </>
+            )}
             Board={ChessBoard}
         />
     );

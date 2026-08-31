@@ -2,7 +2,8 @@ import { act, fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
-import type { LiveStream, StreamDefaultMode } from "../../api/endpoints";
+import type { LiveStream, StreamDefaultMode } from "../../types/api";
+import { makeStream as makeLiveStream } from "../../test-utils/fixtures";
 import { renderWithProviders } from "../../test-utils/render";
 import { MobileLiveView } from "./MobileLiveView";
 
@@ -41,19 +42,12 @@ vi.mock("./streamParts", () => ({
 }));
 
 function makeStream(overrides: Partial<LiveStream> = {}): LiveStream {
-    return {
-        id: "stream-1",
-        userId: "user-1",
+    return makeLiveStream({
         title: "Reading Episode 4",
-        status: "live",
-        viewerCount: 3,
         startedAt: "2026-02-01T12:00:00Z",
         streamerUsername: "beatrice",
-        streamerDisplayName: "Beatrice",
-        streamerAvatarUrl: "",
-        defaultMode: "webrtc",
         ...overrides,
-    };
+    });
 }
 
 interface ViewOptions {
@@ -65,6 +59,7 @@ interface ViewOptions {
     mode?: StreamDefaultMode;
     isOwnStream?: boolean;
     showOwnPreview?: boolean;
+    thumbnailError?: string;
 }
 
 function renderView(options: ViewOptions = {}) {
@@ -89,6 +84,7 @@ function renderView(options: ViewOptions = {}) {
             isOwnStream={options.isOwnStream ?? false}
             showOwnPreview={options.showOwnPreview ?? false}
             onToggleOwnPreview={onToggleOwnPreview}
+            thumbnailError={options.thumbnailError}
         />,
     );
 
@@ -370,6 +366,28 @@ describe("MobileLiveView meta and tabs", () => {
 
         // then
         expect(screen.getByRole("link", { name: /beatrice/ })).toBeInTheDocument();
+    });
+
+    it("tells the streamer when their thumbnail is not updating", () => {
+        // given
+        const thumbnailError = "Your stream thumbnail is not updating. The upload failed.";
+
+        // when
+        renderView({ thumbnailError });
+
+        // then
+        expect(screen.getByRole("status")).toHaveTextContent(thumbnailError);
+    });
+
+    it("says nothing about thumbnails while they are going through", () => {
+        // given
+        const thumbnailError = "";
+
+        // when
+        renderView({ thumbnailError });
+
+        // then
+        expect(screen.queryByRole("status")).not.toBeInTheDocument();
     });
 
     it("opens on the chat tab", () => {

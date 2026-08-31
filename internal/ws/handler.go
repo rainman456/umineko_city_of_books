@@ -29,14 +29,22 @@ const (
 	localsAnonKey         = "ws.anon"
 	sessionRecheckEvery   = 5 * time.Minute
 	readDeadline          = 90 * time.Second
+	membershipCheckLimit  = 3 * time.Second
 
 	inboundPerSecond = 100
 	inboundBurst     = 200
+
+	gameRoomInputType = "game_room_input"
+	rateLimitLogEvery = 5 * time.Second
 )
 
 type (
 	RoomLister interface {
 		GetRoomsByUser(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, error)
+	}
+
+	RoomMembershipChecker interface {
+		IsRoomMember(ctx context.Context, roomID, userID uuid.UUID) (bool, error)
 	}
 
 	BanChecker interface {
@@ -46,6 +54,7 @@ type (
 	GameRoomPresence interface {
 		HandleClientJoin(ctx context.Context, userID, roomID uuid.UUID)
 		HandleClientLeave(userID, roomID uuid.UUID)
+		HandleClientInput(userID, roomID uuid.UUID, payload json.RawMessage)
 	}
 
 	WatchPartyDisconnectHandler interface {
@@ -76,6 +85,11 @@ type (
 
 	gameRoomTopicData struct {
 		RoomID string `json:"room_id"`
+	}
+
+	gameRoomInputData struct {
+		RoomID  string          `json:"room_id"`
+		Payload json.RawMessage `json:"payload"`
 	}
 )
 
@@ -140,7 +154,34 @@ func broadcastPresence(hub *Hub, roomID, userID uuid.UUID, state string) {
 	}, uuid.Nil)
 }
 
-func Handler(hub *Hub, sessionMgr *session.Manager, banChecker BanChecker, roomLister RoomLister, gamePresence GameRoomPresence, watchPartyDisconnect WatchPartyDisconnectHandler, allowedOrigin func(ctx context.Context) string) fiber.Handler {
+func ensureRoomMembership(ctx context.Context, hub *Hub, memberChecker RoomMembershipChecker, roomID, userID uuid.UUID) bool {
+	if hub.IsUserInRoom(roomID, userID) {
+		return true
+	}
+
+	if memberChecker == nil {
+		return false
+	}
+
+	checkCtx, cancel := context.WithTimeout(ctx, membershipCheckLimit)
+	defer cancel()
+
+	isMember, err := memberChecker.IsRoomMember(checkCtx, roomID, userID)
+	if err != nil {
+		logger.Ctx(ctx).Warn().Err(err).Str("user_id", userID.String()).Str("room_id", roomID.String()).Msg("ws membership check failed")
+
+		return false
+	}
+	if !isMember {
+		return false
+	}
+
+	hub.JoinRoom(roomID, userID)
+
+	return true
+}
+
+func Handler(hub *Hub, sessionMgr *session.Manager, banChecker BanChecker, roomLister RoomLister, memberChecker RoomMembershipChecker, gamePresence GameRoomPresence, watchPartyDisconnect WatchPartyDisconnectHandler, allowedOrigin func(ctx context.Context) string) fiber.Handler {
 	wsHandler := websocket.New(func(conn *websocket.Conn) {
 		if anon, _ := conn.Locals(localsAnonKey).(bool); anon {
 			runAnonReader(hub, conn)
@@ -200,6 +241,7 @@ func Handler(hub *Hub, sessionMgr *session.Manager, banChecker BanChecker, roomL
 		_ = conn.SetReadDeadline(time.Now().Add(readDeadline))
 
 		limiter := rate.NewLimiter(inboundPerSecond, inboundBurst)
+		var lastLimitLog time.Time
 
 		for {
 			_, raw, err := conn.ReadMessage()
@@ -221,7 +263,12 @@ func Handler(hub *Hub, sessionMgr *session.Manager, banChecker BanChecker, roomL
 			tokens := limiter.Tokens()
 			if !limiter.Allow() {
 				recordDropped(true)
-				logger.Log.Warn().Str("user_id", userID.String()).Float64("tokens", tokens).Msg("ws inbound rate limit exceeded")
+
+				if now := time.Now(); now.Sub(lastLimitLog) >= rateLimitLogEvery {
+					lastLimitLog = now
+					logger.Log.Warn().Str("user_id", userID.String()).Float64("tokens", tokens).Msg("ws inbound rate limit exceeded")
+				}
+
 				continue
 			}
 
@@ -230,9 +277,25 @@ func Handler(hub *Hub, sessionMgr *session.Manager, banChecker BanChecker, roomL
 				continue
 			}
 
+			if msg.Type == gameRoomInputType {
+				if gamePresence != nil {
+					var data gameRoomInputData
+					if err := json.Unmarshal(msg.Data, &data); err == nil {
+						roomID, perr := uuid.Parse(data.RoomID)
+						if perr == nil && joinedGameRooms[roomID] {
+							gamePresence.HandleClientInput(userID, roomID, data.Payload)
+						}
+					}
+				}
+
+				recordInputFrame()
+
+				continue
+			}
+
 			recordInbound(msg.Type, tokens)
 
-			handleWSMessage(client, msg, hub, gamePresence, joinedGameRooms)
+			handleWSMessage(client, msg, hub, memberChecker, gamePresence, joinedGameRooms)
 		}
 	}, websocket.Config{
 		Origins:           []string{"*"},
@@ -323,7 +386,7 @@ func runAnonReader(hub *Hub, conn *websocket.Conn) {
 	}
 }
 
-func handleWSMessage(client *Client, msg incomingMessage, hub *Hub, gamePresence GameRoomPresence, joinedGameRooms map[uuid.UUID]bool) {
+func handleWSMessage(client *Client, msg incomingMessage, hub *Hub, memberChecker RoomMembershipChecker, gamePresence GameRoomPresence, joinedGameRooms map[uuid.UUID]bool) {
 	userID := client.UserID
 
 	spanCtx, span := hub.tracer.Start(
@@ -361,7 +424,7 @@ func handleWSMessage(client *Client, msg incomingMessage, hub *Hub, gamePresence
 		if err != nil {
 			return
 		}
-		if !hub.IsUserInRoom(roomID, userID) {
+		if !ensureRoomMembership(spanCtx, hub, memberChecker, roomID, userID) {
 			return
 		}
 		hub.AddViewer(roomID, userID)

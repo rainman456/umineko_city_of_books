@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { usePageTitle } from "../../hooks/usePageTitle";
 import { useAuth } from "../../hooks/useAuth";
 import type { ShipCharacter } from "../../types/api";
-import { useShipList } from "../../api/queries/ship";
+import { useShipList } from "../../hooks/queries/ship";
 import { Button } from "../../components/Button/Button";
 import { ProfileLink } from "../../components/ProfileLink/ProfileLink";
 import { Pagination } from "../../components/Pagination/Pagination";
@@ -12,7 +12,7 @@ import { InfoPanel } from "../../components/InfoPanel/InfoPanel";
 import { RulesBox } from "../../components/RulesBox/RulesBox";
 import { ToggleSwitch } from "../../components/ToggleSwitch/ToggleSwitch";
 import { RelativeTimestamp } from "../../components/RelativeTimestamp/RelativeTimestamp";
-import { PieceTrigger } from "../../features/easterEgg";
+import { PieceTrigger } from "../../components/easterEgg";
 import styles from "./ShipPages.module.css";
 
 function characterPillClass(series: string): string {
@@ -32,7 +32,9 @@ export function CharacterPills({ characters }: { characters: ShipCharacter[] }) 
             {sorted.map((c, idx) => (
                 <Fragment key={`${c.series}-${c.character_id ?? c.character_name}-${idx}`}>
                     {idx > 0 && <span className={styles.xDivider}>×</span>}
-                    <span className={characterPillClass(c.series)}>{c.character_name}</span>
+                    <span dir="auto" className={characterPillClass(c.series)}>
+                        {c.character_name}
+                    </span>
                 </Fragment>
             ))}
         </div>
@@ -135,9 +137,15 @@ export function ShipsListPage() {
                                 <div className={styles.cardImagePlaceholder}>♥</div>
                             )}
                             <div className={styles.cardBody}>
-                                <h3 className={styles.cardTitle}>{s.title}</h3>
+                                <h3 dir="auto" className={styles.cardTitle}>
+                                    {s.title}
+                                </h3>
                                 <CharacterPills characters={s.characters} />
-                                {s.description && <p className={styles.cardDescription}>{s.description}</p>}
+                                {s.description && (
+                                    <p dir="auto" className={styles.cardDescription}>
+                                        {s.description}
+                                    </p>
+                                )}
                                 <div className={styles.cardMeta}>
                                     <ProfileLink user={s.author} size="small" clickable={false} />
                                     <RelativeTimestamp value={s.created_at} />

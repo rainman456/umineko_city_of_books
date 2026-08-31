@@ -1,10 +1,10 @@
-import { act, fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { WSMessageHandler } from "../../../context/notificationContextValue";
-import { makeUser } from "../../../test-utils/fixtures";
+import { makePost as makeContentPost, makeUser } from "../../../test-utils/fixtures";
 import { renderWithProviders } from "../../../test-utils/render";
-import type { Poll, Post, PostMedia, SharedContentPreview, User, UserProfile } from "../../../types/api";
+import { emitRealtimeEvent } from "../../../test-utils/ws";
+import type { LinkPreview, Poll, Post, PostMedia, SharedContentPreview, User, UserProfile } from "../../../types/api";
 import { PostCard } from "./PostCard";
 
 const mocks = vi.hoisted(() => ({
@@ -22,7 +22,9 @@ const mocks = vi.hoisted(() => ({
     navigate: vi.fn(),
 }));
 
-vi.mock("../../../api/mutations/post", () => ({
+const { previews } = vi.hoisted(() => ({ previews: { byURL: new Map<string, LinkPreview>() } }));
+
+vi.mock("../../../hooks/mutations/post", () => ({
     useLikePost: () => ({ mutateAsync: mocks.like }),
     useUnlikePost: () => ({ mutateAsync: mocks.unlike }),
     useDeletePost: () => ({ mutateAsync: mocks.deletePost }),
@@ -35,8 +37,12 @@ vi.mock("../../../api/mutations/post", () => ({
     useVotePoll: () => ({ mutateAsync: mocks.votePoll }),
 }));
 
-vi.mock("../../../api/mutations/misc", () => ({
+vi.mock("../../../hooks/mutations/report", () => ({
     useCreateReport: () => ({ mutateAsync: mocks.createReport, isPending: false }),
+}));
+
+vi.mock("../../../hooks/queries/linkPreview", () => ({
+    useLinkPreview: (url: string) => ({ preview: previews.byURL.get(url), loading: false }),
 }));
 
 vi.mock("react-router", async importOriginal => {
@@ -55,19 +61,7 @@ const author: User = {
 };
 
 function makePost(overrides: Partial<Post> = {}): Post {
-    return {
-        id: postId,
-        author,
-        body: "Without love it cannot be seen",
-        media: [],
-        share_count: 0,
-        like_count: 0,
-        comment_count: 0,
-        view_count: 0,
-        user_liked: false,
-        created_at: "2026-08-02T11:00:00Z",
-        ...overrides,
-    };
+    return makeContentPost({ id: postId, author, created_at: "2026-08-02T11:00:00Z", ...overrides });
 }
 
 function makeMedia(id: number): PostMedia {
@@ -86,14 +80,16 @@ interface CardOptions {
     user?: UserProfile | null;
     onDelete?: () => void;
     onEdit?: () => void;
-    addWSListener?: (handler: WSMessageHandler) => () => void;
 }
 
 function renderCard(post: Post, options: CardOptions = {}) {
     return renderWithProviders(<PostCard post={post} onDelete={options.onDelete} onEdit={options.onEdit} />, {
         user: options.user ?? null,
-        notification: options.addWSListener ? { addWSListener: options.addWSListener } : undefined,
     });
+}
+
+function emitLike(targetId: string, delta: number) {
+    emitRealtimeEvent({ type: "post_like", data: { post_id: targetId, delta } });
 }
 
 function likeButton(): HTMLElement {
@@ -108,6 +104,7 @@ beforeEach(() => {
     mocks.deletePostMedia.mockResolvedValue(undefined);
     mocks.uploadPostMedia.mockResolvedValue(makeMedia(9));
     mocks.createComment.mockResolvedValue({ id: "comment-1" });
+    previews.byURL.clear();
 });
 
 describe("PostCard", () => {
@@ -242,19 +239,10 @@ describe("PostCard", () => {
 
     it("counts a like that arrives over the websocket from someone else", () => {
         // given
-        const handlers: WSMessageHandler[] = [];
-        const addWSListener = (handler: WSMessageHandler) => {
-            handlers.push(handler);
-            return () => {};
-        };
-        renderCard(makePost({ like_count: 3 }), { user: strangerProfile, addWSListener });
+        renderCard(makePost({ like_count: 3 }), { user: strangerProfile });
 
         // when
-        act(() => {
-            for (const handler of handlers) {
-                handler({ type: "post_like", data: { post_id: postId, delta: 1 } });
-            }
-        });
+        emitLike(postId, 1);
 
         // then
         expect(screen.getByRole("button", { name: "♡ 4" })).toBeInTheDocument();
@@ -263,20 +251,11 @@ describe("PostCard", () => {
     it("ignores a websocket like that is the echo of the reader's own", async () => {
         // given
         const testUser = userEvent.setup();
-        const handlers: WSMessageHandler[] = [];
-        const addWSListener = (handler: WSMessageHandler) => {
-            handlers.push(handler);
-            return () => {};
-        };
-        renderCard(makePost({ like_count: 3 }), { user: strangerProfile, addWSListener });
+        renderCard(makePost({ like_count: 3 }), { user: strangerProfile });
         await testUser.click(likeButton());
 
         // when
-        act(() => {
-            for (const handler of handlers) {
-                handler({ type: "post_like", data: { post_id: postId, delta: 1 } });
-            }
-        });
+        emitLike(postId, 1);
 
         // then
         expect(screen.getByRole("button", { name: "♥ 4" })).toBeInTheDocument();
@@ -285,22 +264,13 @@ describe("PostCard", () => {
     it("ignores both echoes when two of the reader's own toggles are in flight", async () => {
         // given
         const testUser = userEvent.setup();
-        const handlers: WSMessageHandler[] = [];
-        const addWSListener = (handler: WSMessageHandler) => {
-            handlers.push(handler);
-            return () => {};
-        };
-        renderCard(makePost({ like_count: 3 }), { user: strangerProfile, addWSListener });
+        renderCard(makePost({ like_count: 3 }), { user: strangerProfile });
         await testUser.click(likeButton());
         await testUser.click(likeButton());
 
         // when
-        act(() => {
-            for (const handler of handlers) {
-                handler({ type: "post_like", data: { post_id: postId, delta: 1 } });
-                handler({ type: "post_like", data: { post_id: postId, delta: -1 } });
-            }
-        });
+        emitLike(postId, 1);
+        emitLike(postId, -1);
 
         // then
         expect(screen.getByRole("button", { name: "♡ 3" })).toBeInTheDocument();
@@ -308,19 +278,10 @@ describe("PostCard", () => {
 
     it("ignores a websocket like meant for a different post", () => {
         // given
-        const handlers: WSMessageHandler[] = [];
-        const addWSListener = (handler: WSMessageHandler) => {
-            handlers.push(handler);
-            return () => {};
-        };
-        renderCard(makePost({ like_count: 3 }), { user: strangerProfile, addWSListener });
+        renderCard(makePost({ like_count: 3 }), { user: strangerProfile });
 
         // when
-        act(() => {
-            for (const handler of handlers) {
-                handler({ type: "post_like", data: { post_id: "another-post", delta: 5 } });
-            }
-        });
+        emitLike("another-post", 5);
 
         // then
         expect(screen.getByRole("button", { name: "♡ 3" })).toBeInTheDocument();
@@ -533,7 +494,7 @@ describe("PostCard", () => {
 
         // then
         expect(screen.getByText("Share to Game Board")).toBeInTheDocument();
-        expect(screen.getByText("Sharing: Without love it cannot be seen")).toBeInTheDocument();
+        expect(screen.getByText(/Sharing:/)).toHaveTextContent("Sharing: Without love it cannot be seen");
     });
 
     it("toggles the quick reply box open and shut", async () => {
@@ -585,6 +546,18 @@ describe("PostCard", () => {
         const image = container.querySelector("img");
         expect(image).toHaveAttribute("src", body);
         expect(screen.queryByText(body)).not.toBeInTheDocument();
+    });
+
+    it("does not repeat the gif as a link preview when the body is nothing but a giphy link", () => {
+        // given
+        const body = "https://media.giphy.com/media/abc123/beato.gif";
+        previews.byURL.set(body, { url: body, type: "image" } as LinkPreview);
+
+        // when
+        const { container } = renderCard(makePost({ body }));
+
+        // then
+        expect(container.querySelectorAll(`img[src="${body}"]`)).toHaveLength(1);
     });
 
     it("opens the post when the body itself is clicked", async () => {

@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { usePageTitle } from "../../hooks/usePageTitle";
-import { useFinishedGameRooms } from "../../api/queries/gameRoom";
+import { useFinishedGameRooms } from "../../hooks/queries/gameRoom";
 import { Button } from "../../components/Button/Button";
 import { formatFullDateTime } from "../../utils/time";
 import styles from "./GamesPages.module.css";
@@ -38,20 +38,29 @@ export function PastGamesPage() {
                         {rooms.map(r => {
                             const white = r.players.find(p => p.slot === 0);
                             const black = r.players.find(p => p.slot === 1);
-                            let outcome: string;
+                            let outcome: ReactNode;
                             if (!r.winner_user_id) {
                                 outcome = "Draw";
                             } else if (r.winner_user_id === white?.user_id) {
-                                outcome = `${white?.display_name ?? "White"} won`;
+                                outcome = (
+                                    <>
+                                        <bdi>{white?.display_name ?? "White"}</bdi> won
+                                    </>
+                                );
                             } else {
-                                outcome = `${black?.display_name ?? "Black"} won`;
+                                outcome = (
+                                    <>
+                                        <bdi>{black?.display_name ?? "Black"}</bdi> won
+                                    </>
+                                );
                             }
                             const when = r.finished_at ?? r.updated_at;
                             return (
                                 <Link key={r.id} to={`/games/${r.game_type}/${r.id}`} className={styles.gameRow}>
                                     <div className={styles.gameRowContent}>
                                         <span className={styles.opponentLine}>
-                                            {white?.display_name ?? "?"} vs {black?.display_name ?? "?"}
+                                            <bdi>{white?.display_name ?? "?"}</bdi> vs{" "}
+                                            <bdi>{black?.display_name ?? "?"}</bdi>
                                         </span>
                                         <span className={styles.subline}>
                                             {r.game_type}, {outcome}, {formatFullDateTime(when)}

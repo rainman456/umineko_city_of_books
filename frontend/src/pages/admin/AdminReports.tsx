@@ -1,7 +1,8 @@
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { useReports } from "../../api/queries/admin";
-import { useResolveReport } from "../../api/mutations/admin";
+import type { ReportItem } from "../../types/api";
+import { useReports } from "../../hooks/queries/report";
+import { useResolveReport } from "../../hooks/mutations/report";
 import { usePageTitle } from "../../hooks/usePageTitle";
 import { Button } from "../../components/Button/Button";
 import { Modal } from "../../components/Modal/Modal";
@@ -9,7 +10,7 @@ import { Select } from "../../components/Select/Select";
 import { formatFullDateTime } from "../../utils/time";
 import styles from "./AdminReports.module.css";
 
-function reportTargetPath(report: import("../../api/endpoints").ReportItem): string | null {
+function reportTargetPath(report: ReportItem): string | null {
     if (report.target_type === "theory") {
         return `/theory/${report.target_id}`;
     }
@@ -166,6 +167,7 @@ export function AdminReports() {
                     <label className={styles.resolveLabel}>Message to the reporter (optional):</label>
                     <textarea
                         ref={textareaRef}
+                        dir="auto"
                         className={styles.resolveTextarea}
                         value={comment}
                         onChange={e => setComment(e.target.value)}

@@ -1,7 +1,7 @@
 import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { makeUser } from "../../../test-utils/fixtures";
+import { makeGamePlayer, makeGameRoom, makeUser } from "../../../test-utils/fixtures";
 import { renderWithProviders } from "../../../test-utils/render";
 import type { GameRoom, GameRoomPlayer, SnakesLaddersState, SnakesLaddersStats, User } from "../../../types/api";
 import { SnakesAndLaddersBoardView } from "./SnakesAndLaddersBoardView";
@@ -29,19 +29,7 @@ const onRoll = vi.fn<() => Promise<void>>();
 const onResign = vi.fn<() => Promise<void>>();
 
 function makePlayer(overrides: Partial<GameRoomPlayer> = {}): GameRoomPlayer {
-    const id = overrides.user_id ?? "u-one";
-    return {
-        user_id: id,
-        username: "battler",
-        display_name: "Battler",
-        avatar_url: "",
-        role: "player",
-        slot: 0,
-        joined: true,
-        connected: true,
-        user: { id, username: "battler", display_name: "Battler" },
-        ...overrides,
-    };
+    return makeGamePlayer({ user_id: "u-one", ...overrides });
 }
 
 function makeState(overrides: Partial<SnakesLaddersState> = {}): SnakesLaddersState {
@@ -55,12 +43,11 @@ function makeState(overrides: Partial<SnakesLaddersState> = {}): SnakesLaddersSt
     };
 }
 
-function makeRoom(overrides: Partial<GameRoom> = {}): GameRoom {
-    return {
-        id: "room-1",
+function makeRoom(
+    overrides: Partial<GameRoom<SnakesLaddersState, SnakesLaddersStats>> = {},
+): GameRoom<SnakesLaddersState, SnakesLaddersStats> {
+    return makeGameRoom(makeState(), {
         game_type: "snakes_and_ladders",
-        status: "active",
-        state: makeState(),
         turn_user_id: "u-one",
         created_by: "u-one",
         created_at: "2026-08-02T10:00:00.000Z",
@@ -69,9 +56,8 @@ function makeRoom(overrides: Partial<GameRoom> = {}): GameRoom {
             makePlayer({ user_id: "u-one", slot: 0, display_name: "Battler" }),
             makePlayer({ user_id: "u-two", slot: 1, display_name: "Erika", username: "erika" }),
         ],
-        watcher_count: 0,
         ...overrides,
-    };
+    });
 }
 
 function makeStats(overrides: Partial<SnakesLaddersStats> = {}): SnakesLaddersStats {
@@ -91,7 +77,7 @@ function makeStats(overrides: Partial<SnakesLaddersStats> = {}): SnakesLaddersSt
     };
 }
 
-function renderBoard(room: GameRoom, viewer: User | null, isSpectator = false) {
+function renderBoard(room: GameRoom<SnakesLaddersState, SnakesLaddersStats>, viewer: User | null, isSpectator = false) {
     return renderWithProviders(
         <SnakesAndLaddersBoardView
             room={room}

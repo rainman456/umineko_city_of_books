@@ -2,10 +2,10 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createContext } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeWatchPartySession } from "../../../test-utils/fixtures";
 import { renderWithProviders } from "../../../test-utils/render";
-import type { User, WatchPartyParticipant, WatchPartySession } from "../../../types/api";
-import type { SiteRole } from "../../../utils/permissions";
-import type { ActiveWatchPartySession } from "./useWatchParty";
+import type { SiteRole, User, WatchPartyParticipant, WatchPartySession } from "../../../types/api";
+import type { ActiveWatchPartySession } from "../../../hooks/useWatchParty";
 import { WatchPartyModal } from "./WatchPartyModal";
 
 const mocks = vi.hoisted(() => ({
@@ -50,9 +50,19 @@ vi.mock("./ScreenShareView", () => ({
 
 vi.mock("./useAudioPlaybackGuard", () => ({ useAudioPlaybackGuard: vi.fn() }));
 
-vi.mock("./useSessionMedia", () => ({ useSessionMedia: mocks.useSessionMedia }));
+vi.mock("../../../hooks/useSessionMedia", () => ({ useSessionMedia: mocks.useSessionMedia }));
 
-vi.mock("../../../api/endpoints", () => ({ forceMuteWatchPartyVoiceParticipant: mocks.forceMute }));
+vi.mock("../../../api/endpoints/watchParty", () => ({
+    forceMuteWatchPartyVoiceParticipant: mocks.forceMute,
+    endWatchParty: vi.fn(),
+    getWatchPartyVoiceToken: vi.fn(),
+    identifyWatchPartyParticipant: vi.fn(),
+    joinWatchParty: vi.fn(),
+    kickWatchPartyParticipant: vi.fn(),
+    leaveWatchParty: vi.fn(),
+    startWatchParty: vi.fn(),
+    transferWatchPartyControl: vi.fn(),
+}));
 
 vi.mock("../RoomChatPanel/RoomChatPanel", () => ({
     RoomChatPanel: ({ roomId, title }: { roomId?: string; title: string }) => (
@@ -80,18 +90,12 @@ function makeParticipant(overrides: Partial<WatchPartyParticipant> = {}): WatchP
 }
 
 function makeSession(overrides: Partial<WatchPartySession> = {}): WatchPartySession {
-    return {
-        id: "session-1",
-        room_id: "room-1",
+    return makeWatchPartySession({
         started_by: viewerId,
         controller_id: viewerId,
-        title: "Chiru rewatch",
-        type: "hyperbeam",
-        status: "active",
-        started_at: "2026-08-01T10:00:00Z",
         participants: [makeParticipant()],
         ...overrides,
-    };
+    });
 }
 
 function makeActive(overrides: Partial<ActiveWatchPartySession> = {}): ActiveWatchPartySession {
@@ -660,7 +664,53 @@ describe("WatchPartyModal voice", () => {
         await user.click(screen.getByRole("button", { name: "force mute" }));
 
         // then
-        expect(mocks.forceMute).toHaveBeenCalledWith("room-1", "session-1", "battler", true);
+        await waitFor(() => {
+            expect(mocks.forceMute).toHaveBeenCalledWith("room-1", "session-1", "battler", true);
+        });
+    });
+
+    it("tells the moderator when a forced mute was refused", async () => {
+        // given
+        const user = userEvent.setup();
+        mocks.forceMute.mockRejectedValue(new Error("that watcher outranks you"));
+        stubMedia({ room: {} });
+        renderModal({ isStarter: true });
+
+        // when
+        await user.click(screen.getByRole("button", { name: "force mute" }));
+
+        // then
+        expect(await screen.findByRole("alert")).toHaveTextContent("that watcher outranks you");
+    });
+
+    it("falls back to a plain message when the refused mute carries none", async () => {
+        // given
+        const user = userEvent.setup();
+        mocks.forceMute.mockRejectedValue(new Error(""));
+        stubMedia({ room: {} });
+        renderModal({ isStarter: true });
+
+        // when
+        await user.click(screen.getByRole("button", { name: "force mute" }));
+
+        // then
+        expect(await screen.findByRole("alert")).toHaveTextContent("Could not change that microphone.");
+    });
+
+    it("says nothing about the microphone while every forced mute has worked", async () => {
+        // given
+        const user = userEvent.setup();
+        stubMedia({ room: {} });
+        renderModal({ isStarter: true });
+
+        // when
+        await user.click(screen.getByRole("button", { name: "force mute" }));
+
+        // then
+        await waitFor(() => {
+            expect(mocks.forceMute).toHaveBeenCalled();
+        });
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
 });
 

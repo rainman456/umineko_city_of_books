@@ -1,7 +1,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { makeUser } from "../../../test-utils/fixtures";
+import { makeGamePlayer, makeGameRoom, makeUser } from "../../../test-utils/fixtures";
 import { renderWithProviders } from "../../../test-utils/render";
 import type { CheckersState, CheckersStats, GameRoom, GameRoomPlayer, User } from "../../../types/api";
 import { CheckersBoardView } from "./CheckersBoardView";
@@ -29,19 +29,7 @@ function boardWith(pieces: Record<string, string>): string {
 }
 
 function makePlayer(overrides: Partial<GameRoomPlayer> = {}): GameRoomPlayer {
-    const id = overrides.user_id ?? "u-red";
-    return {
-        user_id: id,
-        username: "battler",
-        display_name: "Battler",
-        avatar_url: "",
-        role: "player",
-        slot: 0,
-        joined: true,
-        connected: true,
-        user: { id, username: "battler", display_name: "Battler" },
-        ...overrides,
-    };
+    return makeGamePlayer({ user_id: "u-red", ...overrides });
 }
 
 function makeState(overrides: Partial<CheckersState> = {}): CheckersState {
@@ -58,12 +46,11 @@ function makeState(overrides: Partial<CheckersState> = {}): CheckersState {
     };
 }
 
-function makeRoom(overrides: Partial<GameRoom> = {}): GameRoom {
-    return {
-        id: "room-1",
+function makeRoom(
+    overrides: Partial<GameRoom<CheckersState, CheckersStats>> = {},
+): GameRoom<CheckersState, CheckersStats> {
+    return makeGameRoom(makeState(), {
         game_type: "checkers",
-        status: "active",
-        state: makeState(),
         turn_user_id: "u-red",
         created_by: "u-red",
         created_at: "2026-08-02T10:00:00.000Z",
@@ -72,9 +59,8 @@ function makeRoom(overrides: Partial<GameRoom> = {}): GameRoom {
             makePlayer({ user_id: "u-red", slot: 0, display_name: "Battler" }),
             makePlayer({ user_id: "u-black", slot: 1, display_name: "Beatrice", username: "beatrice" }),
         ],
-        watcher_count: 0,
         ...overrides,
-    };
+    });
 }
 
 function makeStats(overrides: Partial<CheckersStats> = {}): CheckersStats {
@@ -95,7 +81,7 @@ function makeStats(overrides: Partial<CheckersStats> = {}): CheckersStats {
     };
 }
 
-function renderBoard(room: GameRoom, viewer: User | null, isSpectator = false) {
+function renderBoard(room: GameRoom<CheckersState, CheckersStats>, viewer: User | null, isSpectator = false) {
     return renderWithProviders(
         <CheckersBoardView
             room={room}
@@ -335,7 +321,7 @@ describe("CheckersBoardView", () => {
 
     it("falls back to the opening layout when the room has no board yet", () => {
         // given
-        const room = makeRoom({ state: {} });
+        const room = makeRoom({ state: {} as CheckersState });
 
         // when
         renderBoard(room, redViewer);

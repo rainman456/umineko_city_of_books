@@ -1,7 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { makeUser } from "../../test-utils/fixtures";
+import { makeArt as makeContentArt, makeGallery as makeContentGallery, makeUser } from "../../test-utils/fixtures";
 import { renderWithProviders } from "../../test-utils/render";
 import type { Art, Gallery, TagCount, UserProfile } from "../../types/api";
 import { ArtGalleryPage } from "./ArtGalleryPage";
@@ -16,19 +16,19 @@ const mocks = vi.hoisted(() => ({
     navigate: vi.fn(),
 }));
 
-vi.mock("../../api/queries/art", () => ({
+vi.mock("../../hooks/queries/art", () => ({
     useArtFeed: mocks.useArtFeed,
     useAllGalleries: mocks.useAllGalleries,
+    usePopularTags: mocks.usePopularTags,
 }));
 
-vi.mock("../../api/queries/misc", () => ({
-    usePopularTags: mocks.usePopularTags,
+vi.mock("../../hooks/queries/site", () => ({
     useRules: mocks.useRules,
 }));
 
-vi.mock("../../api/queries/user", () => ({ useUserGalleries: mocks.useUserGalleries }));
+vi.mock("../../hooks/queries/user", () => ({ useUserGalleries: mocks.useUserGalleries }));
 
-vi.mock("../../api/mutations/art", () => ({
+vi.mock("../../hooks/mutations/art", () => ({
     useCreateGallery: () => ({ mutateAsync: mocks.createGallery, isPending: false }),
 }));
 
@@ -51,38 +51,16 @@ const beatrice = { id: "beatrice-id", username: "beatrice", display_name: "Beatr
 const ronove = { id: "ronove-id", username: "ronove", display_name: "Ronove" };
 
 function makeGallery(overrides: Partial<Gallery> = {}): Gallery {
-    return {
-        id: "gallery-1",
-        author: beatrice,
-        name: "Golden Butterflies",
-        description: "",
-        cover_image_url: "",
-        cover_thumbnail_url: "",
-        art_count: 3,
-        created_at: "2026-07-01T10:00:00Z",
-        ...overrides,
-    };
+    return makeContentGallery({ author: beatrice, ...overrides });
 }
 
 function makeArt(overrides: Partial<Art> = {}): Art {
-    return {
-        id: "art-1",
+    return makeContentArt({
         author: beatrice,
-        corner: "general",
-        art_type: "drawing",
         title: "Beatrice at dusk",
-        description: "",
-        image_url: "/art-1-full.png",
-        thumbnail_url: "/art-1-thumb.png",
-        tags: [],
-        like_count: 0,
-        comment_count: 0,
-        view_count: 0,
-        user_liked: false,
-        is_spoiler: false,
         created_at: "2026-07-01T10:00:00Z",
         ...overrides,
-    };
+    });
 }
 
 interface PageState {
@@ -93,7 +71,6 @@ interface PageState {
     galleriesLoading?: boolean;
     userGalleries?: Gallery[];
     tags?: TagCount[];
-    hasPrev?: boolean;
 }
 
 function stubPage(state: PageState = {}) {
@@ -102,10 +79,6 @@ function stubPage(state: PageState = {}) {
         art: state.art ?? [],
         total: state.total ?? state.art?.length ?? 0,
         loading: state.feedLoading ?? false,
-        offset: 0,
-        limit: 24,
-        hasNext: (state.total ?? 0) > 24,
-        hasPrev: state.hasPrev ?? false,
         refresh: vi.fn(),
     });
     mocks.useAllGalleries.mockReturnValue({
@@ -190,7 +163,7 @@ describe("ArtGalleryPage corners", () => {
         renderWithProviders(<ArtGalleryPage corner="umineko" />, { user: null, route: "/umineko/gallery?view=all" });
 
         // then
-        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("umineko", undefined, undefined, undefined, "new", 1, 0);
+        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("umineko", undefined, undefined, undefined, "new", 0, 24);
         expect(mocks.usePopularTags).toHaveBeenCalledWith("umineko");
     });
 });
@@ -451,7 +424,7 @@ describe("ArtGalleryPage all art view", () => {
         await user.click(screen.getByRole("button", { name: "Most Viewed" }));
 
         // then
-        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "views", 1, 0);
+        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "views", 0, 24);
     });
 
     it("drops the sort back out of the address bar when new is chosen again", async () => {
@@ -464,7 +437,7 @@ describe("ArtGalleryPage all art view", () => {
         await user.click(screen.getByRole("button", { name: "New" }));
 
         // then
-        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "new", 1, 0);
+        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "new", 0, 24);
     });
 
     it("narrows the feed to a single kind of art", async () => {
@@ -477,7 +450,7 @@ describe("ArtGalleryPage all art view", () => {
         await user.click(screen.getByRole("button", { name: "Cosplay" }));
 
         // then
-        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", "cosplay", undefined, undefined, "new", 1, 0);
+        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", "cosplay", undefined, undefined, "new", 0, 24);
     });
 
     it("clears the kind filter again", async () => {
@@ -490,7 +463,7 @@ describe("ArtGalleryPage all art view", () => {
         await user.click(screen.getByRole("button", { name: "All" }));
 
         // then
-        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "new", 1, 0);
+        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "new", 0, 24);
     });
 
     it("hides the tag bar while there are no popular tags", () => {
@@ -525,7 +498,7 @@ describe("ArtGalleryPage all art view", () => {
         await user.click(screen.getByRole("button", { name: "beatrice (12)" }));
 
         // then
-        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, "beatrice", "new", 1, 0);
+        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, "beatrice", "new", 0, 24);
     });
 
     it("unpicks a tag that is already the active filter", async () => {
@@ -538,7 +511,7 @@ describe("ArtGalleryPage all art view", () => {
         await user.click(screen.getByRole("button", { name: "beatrice (12)" }));
 
         // then
-        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "new", 1, 0);
+        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "new", 0, 24);
     });
 
     it("clears the tag filter from the clear chip", async () => {
@@ -551,7 +524,7 @@ describe("ArtGalleryPage all art view", () => {
         await user.click(screen.getByRole("button", { name: "Clear filter" }));
 
         // then
-        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "new", 1, 0);
+        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "new", 0, 24);
     });
 
     it("walks forward a page at a time", async () => {
@@ -564,12 +537,12 @@ describe("ArtGalleryPage all art view", () => {
         await user.click(screen.getByRole("button", { name: "Next" }));
 
         // then
-        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "new", 2, 0);
+        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "new", 24, 24);
     });
 
     it("walks back a page at a time", async () => {
         // given
-        stubPage({ art: [makeArt()], total: 100, hasPrev: true });
+        stubPage({ art: [makeArt()], total: 100 });
         const user = userEvent.setup();
         renderPage("/gallery?view=all&page=3");
 
@@ -577,12 +550,12 @@ describe("ArtGalleryPage all art view", () => {
         await user.click(screen.getByRole("button", { name: "Previous" }));
 
         // then
-        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "new", 2, 0);
+        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "new", 24, 24);
     });
 
     it("refuses to walk back past the first page", async () => {
         // given
-        stubPage({ art: [makeArt()], total: 100, hasPrev: true });
+        stubPage({ art: [makeArt()], total: 100 });
         const user = userEvent.setup();
         renderPage("/gallery?view=all");
 
@@ -590,7 +563,7 @@ describe("ArtGalleryPage all art view", () => {
         await user.click(screen.getByRole("button", { name: "Previous" }));
 
         // then
-        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "new", 1, 0);
+        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "new", 0, 24);
     });
 
     it("greys out the previous button on the first page", () => {
@@ -612,7 +585,7 @@ describe("ArtGalleryPage all art view", () => {
         renderPage("/gallery?view=all&page=3");
 
         // then
-        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "new", 3, 0);
+        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "new", 48, 24);
     });
 });
 
@@ -626,7 +599,7 @@ describe("ArtGalleryPage searching", () => {
 
         // then
         expect(screen.getByPlaceholderText("Search art...")).toHaveValue("beatrice");
-        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, "beatrice", undefined, "new", 1, 0);
+        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, "beatrice", undefined, "new", 0, 24);
     });
 
     it("waits for the typing to settle before searching", () => {
@@ -639,11 +612,11 @@ describe("ArtGalleryPage searching", () => {
         fireEvent.change(screen.getByPlaceholderText("Search art..."), { target: { value: "beatrice" } });
 
         // then
-        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "new", 1, 0);
+        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "new", 0, 24);
         act(() => {
             vi.advanceTimersByTime(300);
         });
-        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, "beatrice", undefined, "new", 1, 0);
+        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, "beatrice", undefined, "new", 0, 24);
     });
 
     it("returns to the first page when a new search settles", () => {
@@ -659,7 +632,7 @@ describe("ArtGalleryPage searching", () => {
         });
 
         // then
-        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, "beatrice", undefined, "new", 1, 0);
+        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, "beatrice", undefined, "new", 0, 24);
     });
 
     it("drops the search again when the box is emptied", () => {
@@ -675,7 +648,7 @@ describe("ArtGalleryPage searching", () => {
         });
 
         // then
-        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "new", 1, 0);
+        expect(mocks.useArtFeed).toHaveBeenLastCalledWith("general", undefined, undefined, undefined, "new", 0, 24);
     });
 });
 

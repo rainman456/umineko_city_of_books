@@ -1,7 +1,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { makeUser } from "../../test-utils/fixtures";
+import { makeGamePlayer, makeGameRoom, makeUser } from "../../test-utils/fixtures";
 import { renderWithProviders } from "../../test-utils/render";
 import type { GameRoom, GameRoomPlayer } from "../../types/api";
 import { GamesListPage } from "./GamesListPage";
@@ -13,8 +13,8 @@ const { useMyGameRooms, useDeclineGameInvite, useCancelGameInvite, navigate } = 
     navigate: vi.fn(),
 }));
 
-vi.mock("../../api/queries/gameRoom", () => ({ useMyGameRooms }));
-vi.mock("../../api/mutations/gameRoom", () => ({ useDeclineGameInvite, useCancelGameInvite }));
+vi.mock("../../hooks/queries/gameRoom", () => ({ useMyGameRooms }));
+vi.mock("../../hooks/mutations/gameRoom", () => ({ useDeclineGameInvite, useCancelGameInvite }));
 vi.mock("react-router", async importOriginal => {
     const actual = await importOriginal<typeof import("react-router")>();
     return { ...actual, useNavigate: () => navigate };
@@ -24,36 +24,29 @@ const viewer = makeUser({ id: "me", username: "me", display_name: "Me" });
 
 function makePlayer(overrides: Partial<GameRoomPlayer> = {}): GameRoomPlayer {
     const id = overrides.user_id ?? "me";
-    return {
+
+    return makeGamePlayer({
         user_id: id,
         username: "beatrice",
         display_name: "Beatrice",
-        avatar_url: "",
-        role: "player",
-        slot: 0,
-        joined: true,
-        connected: true,
         user: { id, username: "beatrice", display_name: "Beatrice" },
         ...overrides,
-    };
+    });
 }
 
 function makeRoom(overrides: Partial<GameRoom> = {}): GameRoom {
-    return {
-        id: "room-1",
-        game_type: "chess",
-        status: "pending",
-        state: {},
-        created_by: "beatrice-id",
-        created_at: "2026-07-01T10:00:00Z",
-        updated_at: "2026-07-01T10:00:00Z",
-        players: [
-            makePlayer({ user_id: "me", slot: 0, display_name: "Me" }),
-            makePlayer({ user_id: "beatrice-id", slot: 1, display_name: "Beatrice" }),
-        ],
-        watcher_count: 0,
-        ...overrides,
-    };
+    return makeGameRoom(
+        {},
+        {
+            status: "pending",
+            created_by: "beatrice-id",
+            players: [
+                makePlayer({ user_id: "me", slot: 0, display_name: "Me" }),
+                makePlayer({ user_id: "beatrice-id", slot: 1, display_name: "Beatrice" }),
+            ],
+            ...overrides,
+        },
+    );
 }
 
 interface StubOptions {
@@ -160,7 +153,7 @@ describe("GamesListPage", () => {
         renderPage();
 
         // then
-        expect(screen.getByText("Beatrice invited you to Chess")).toBeInTheDocument();
+        expect(screen.getByText(/invited you to/)).toHaveTextContent("Beatrice invited you to Chess");
         expect(screen.getByRole("button", { name: "View and accept" })).toBeInTheDocument();
     });
 
@@ -172,7 +165,7 @@ describe("GamesListPage", () => {
         renderPage();
 
         // then
-        expect(screen.getByText("Othello vs Beatrice")).toBeInTheDocument();
+        expect(screen.getByText(/^Othello vs/)).toHaveTextContent("Othello vs Beatrice");
         expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
         expect(screen.getByText("No pending invites.")).toBeInTheDocument();
     });
@@ -352,7 +345,7 @@ describe("GamesListPage", () => {
         renderPage();
 
         // then
-        expect(screen.getByText("Chess vs Unknown")).toBeInTheDocument();
+        expect(screen.getByText(/^Chess vs/)).toHaveTextContent("Chess vs Unknown");
     });
 
     it("links through to the live games page", () => {

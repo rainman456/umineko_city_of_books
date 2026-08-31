@@ -15,13 +15,15 @@ import (
 	"umineko_city_of_books/internal/config"
 	"umineko_city_of_books/internal/contentfilter"
 	"umineko_city_of_books/internal/dto"
+	"umineko_city_of_books/internal/homefeed"
 	"umineko_city_of_books/internal/logger"
 	"umineko_city_of_books/internal/media"
+	"umineko_city_of_books/internal/mention"
 	"umineko_city_of_books/internal/notification"
+	"umineko_city_of_books/internal/og"
 	"umineko_city_of_books/internal/repository"
 	"umineko_city_of_books/internal/role"
 	"umineko_city_of_books/internal/settings"
-	"umineko_city_of_books/internal/social"
 	"umineko_city_of_books/internal/upload"
 	"umineko_city_of_books/internal/utils"
 
@@ -66,11 +68,14 @@ type (
 		authz         authz.Service
 		blockSvc      block.Service
 		notifService  notification.Service
+		mentionSvc    mention.Service
 		uploadSvc     upload.Service
 		mediaProc     *media.Processor
 		uploader      *media.Uploader
 		settingsSvc   settings.Service
 		contentFilter *contentfilter.Manager
+		ogCache       *og.Resolver
+		echoCache     homefeed.Service
 	}
 )
 
@@ -82,10 +87,13 @@ func NewService(
 	authzService authz.Service,
 	blockSvc block.Service,
 	notifService notification.Service,
+	mentionSvc mention.Service,
 	uploadSvc upload.Service,
 	mediaProc *media.Processor,
 	settingsSvc settings.Service,
 	contentFilter *contentfilter.Manager,
+	ogCache *og.Resolver,
+	echoCache homefeed.Service,
 ) Service {
 	return &service{
 		artRepo:       artRepo,
@@ -95,11 +103,30 @@ func NewService(
 		authz:         authzService,
 		blockSvc:      blockSvc,
 		notifService:  notifService,
+		mentionSvc:    mentionSvc,
 		uploadSvc:     uploadSvc,
 		mediaProc:     mediaProc,
 		uploader:      media.NewUploader(uploadSvc, settingsSvc, mediaProc),
 		settingsSvc:   settingsSvc,
 		contentFilter: contentFilter,
+		ogCache:       ogCache,
+		echoCache:     echoCache,
+	}
+}
+
+func (s *service) clearPageCache(ctx context.Context, kind og.Kind, id string) {
+	if s.ogCache != nil {
+		if err := s.ogCache.ClearMetaCache(ctx, kind, id); err != nil {
+			logger.Ctx(ctx).Warn().Err(err).Str("id", id).Msg("clear og meta cache failed")
+		}
+	}
+
+	if kind != og.KindArt || s.echoCache == nil {
+		return
+	}
+
+	if err := s.echoCache.ClearEchoCache(ctx); err != nil {
+		logger.Ctx(ctx).Warn().Err(err).Msg("clear echo cache failed")
 	}
 }
 
@@ -177,7 +204,7 @@ func (s *service) CreateArt(ctx context.Context, userID uuid.UUID, req dto.Creat
 		return uuid.Nil, err
 	}
 
-	go social.ProcessMentions(s.userRepo, s.blockSvc, s.notifService, s.settingsSvc, userID, description, created.ID, "art", fmt.Sprintf("/gallery/art/%s", created.ID))
+	s.mentionSvc.NotifyAsync(ctx, mention.Reference{Kind: mention.KindArt, EntityID: created.ID}, userID, description)
 
 	return created.ID, nil
 }
@@ -324,6 +351,8 @@ func (s *service) DeleteArt(ctx context.Context, id uuid.UUID, userID uuid.UUID)
 
 	s.uploadSvc.Delete(paths...)
 
+	s.clearPageCache(ctx, og.KindArt, id.String())
+
 	return nil
 }
 
@@ -442,14 +471,16 @@ func (s *service) CreateComment(ctx context.Context, artID uuid.UUID, userID uui
 
 	body := strings.TrimSpace(req.Body)
 
-	created, err := s.artRepo.CreateComment(ctx, artID, req.ParentID, userID, body)
+	id, err := s.mentionSvc.CreateComment(ctx, mention.CommentSpec{
+		Kind:     mention.KindArtComment,
+		EntityID: artID,
+		ParentID: req.ParentID,
+		AuthorID: userID,
+		Body:     body,
+	})
 	if err != nil {
 		return uuid.Nil, err
 	}
-
-	id := created.ID
-
-	go social.ProcessMentions(s.userRepo, s.blockSvc, s.notifService, s.settingsSvc, userID, body, artID, fmt.Sprintf("art_comment:%s", id), fmt.Sprintf("/gallery/art/%s#comment-%s", artID, id))
 
 	go func() {
 		actor, err := s.userRepo.GetByID(ctx, userID)
@@ -700,6 +731,8 @@ func (s *service) DeleteGallery(ctx context.Context, id uuid.UUID, userID uuid.U
 		Details:    fmt.Sprintf("name=%q art=%d files=%d", gallery.Name, gallery.ArtCount, len(paths)),
 		SubjectID:  gallery.UserID,
 	})
+
+	s.clearPageCache(ctx, og.KindGallery, id.String())
 
 	return nil
 }

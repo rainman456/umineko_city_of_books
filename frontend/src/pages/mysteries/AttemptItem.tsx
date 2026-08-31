@@ -5,16 +5,16 @@ import {
     useDeleteMysteryAttempt,
     useMarkMysterySolved,
     useVoteMysteryAttempt,
-} from "../../api/mutations/mystery";
+} from "../../hooks/mutations/mystery";
 import { useAuth } from "../../hooks/useAuth";
 import { useVote } from "../../hooks/useVote";
-import { can } from "../../utils/permissions";
+import { contentPermissions, isContentOwner } from "../../domain/contentPermissions";
 import { Button } from "../../components/Button/Button";
 import { ProfileLink } from "../../components/ProfileLink/ProfileLink";
 import { RelativeTimestamp } from "../../components/RelativeTimestamp/RelativeTimestamp";
 import { ReportButton } from "../../components/ReportButton/ReportButton";
-import { siteUrl } from "../../utils/siteOrigin";
-import { renderRich } from "../../utils/richText";
+import { siteUrl } from "../../platform/siteOrigin";
+import { renderRich } from "../../components/richText/richText";
 import styles from "./MysteryPages.module.css";
 
 function flattenReplies(attempt: MysteryAttempt): { reply: MysteryAttempt; replyToName: string }[] {
@@ -35,7 +35,6 @@ function SingleAttempt({
     attempt,
     mysteryId,
     isAuthor,
-    onRefresh,
     replyToName,
     mysterySolved,
     mysteryPaused,
@@ -44,7 +43,6 @@ function SingleAttempt({
     attempt: MysteryAttempt;
     mysteryId: string;
     isAuthor: boolean;
-    onRefresh: () => void;
     replyToName?: string;
     mysterySolved: boolean;
     mysteryPaused: boolean;
@@ -81,7 +79,6 @@ function SingleAttempt({
             await createReplyMutation.mutateAsync({ body: replyBody.trim(), parentId: attempt.id });
             setReplyBody("");
             setShowReply(false);
-            onRefresh();
         } catch {
             // ignore
         } finally {
@@ -94,7 +91,6 @@ function SingleAttempt({
             return;
         }
         await deleteAttemptMutation.mutateAsync(attempt.id);
-        onRefresh();
     }
 
     async function handleSelectWinner() {
@@ -102,11 +98,11 @@ function SingleAttempt({
             return;
         }
         await markSolvedMutation.mutateAsync(attempt.id);
-        onRefresh();
     }
 
-    const isOwner = user?.id === attempt.author.id;
-    const canDelete = isOwner || can(user, "delete_any_comment");
+    const subject = { family: "mystery_attempt", authorId: attempt.author.id } as const;
+    const isOwner = isContentOwner(user, subject);
+    const { canDelete } = contentPermissions(user, subject);
 
     return (
         <div
@@ -115,11 +111,17 @@ function SingleAttempt({
         >
             <div className={styles.attemptHeader}>
                 <ProfileLink user={attempt.author} size="small" />
-                {replyToName && <span className={styles.replyTo}>@{replyToName}</span>}
+                {replyToName && (
+                    <span dir="auto" className={styles.replyTo}>
+                        @{replyToName}
+                    </span>
+                )}
                 <RelativeTimestamp value={attempt.created_at} />
                 {attempt.is_winner && <span className={styles.winnerBadge}>Winner</span>}
             </div>
-            <div className={styles.attemptBody}>{renderRich(attempt.body)}</div>
+            <div dir="auto" className={styles.attemptBody}>
+                {renderRich(attempt.body)}
+            </div>
             <div className={styles.attemptActions}>
                 {user && (
                     <>
@@ -162,6 +164,7 @@ function SingleAttempt({
             {showReply && (!mysteryPaused || isAuthor) && (
                 <div className={styles.composer}>
                     <textarea
+                        dir="auto"
                         className={styles.composerTextarea}
                         placeholder="Reply..."
                         value={replyBody}
@@ -191,7 +194,6 @@ export function AttemptItem({
     attempt,
     mysteryId,
     isAuthor,
-    onRefresh,
     mysterySolved,
     mysteryPaused,
     authorAlreadyWon,
@@ -199,7 +201,6 @@ export function AttemptItem({
     attempt: MysteryAttempt;
     mysteryId: string;
     isAuthor: boolean;
-    onRefresh: () => void;
     mysterySolved: boolean;
     mysteryPaused: boolean;
     authorAlreadyWon: boolean;
@@ -213,7 +214,6 @@ export function AttemptItem({
                 attempt={attempt}
                 mysteryId={mysteryId}
                 isAuthor={isAuthor}
-                onRefresh={onRefresh}
                 mysterySolved={mysterySolved}
                 mysteryPaused={mysteryPaused}
                 authorAlreadyWon={authorAlreadyWon}
@@ -233,7 +233,6 @@ export function AttemptItem({
                                     attempt={reply}
                                     mysteryId={mysteryId}
                                     isAuthor={isAuthor}
-                                    onRefresh={onRefresh}
                                     replyToName={replyToName}
                                     mysterySolved={mysterySolved}
                                     mysteryPaused={mysteryPaused}

@@ -1,8 +1,9 @@
-import { useResignGame, useSubmitGameAction } from "../../api/mutations/gameRoom";
+import { useResignGame, useSubmitGameAction } from "../../hooks/mutations/gameRoom";
 import { OthelloBoardView } from "../../components/games/othello/OthelloBoardView";
+import type { OthelloState, OthelloStats } from "../../types/api";
 import { GameRoomShell, type GameBoardProps } from "./GameRoomShell";
 
-function OthelloBoard({ room, viewer, isSpectator }: GameBoardProps) {
+function OthelloBoard({ room, viewer, isSpectator }: GameBoardProps<OthelloState, OthelloStats>) {
     const submitAction = useSubmitGameAction(room.id);
     const resign = useResignGame();
 
@@ -27,7 +28,11 @@ export function OthelloGamePage() {
     return (
         <GameRoomShell
             gameName="Othello"
-            inviteCopy={name => `${name} has invited you to an othello game. Accept to start - you will play as white.`}
+            inviteCopy={name => (
+                <>
+                    <bdi>{name}</bdi> has invited you to an othello game. Accept to start - you will play as white.
+                </>
+            )}
             Board={OthelloBoard}
         />
     );

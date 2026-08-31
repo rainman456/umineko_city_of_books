@@ -1,9 +1,9 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { makeUser } from "../../test-utils/fixtures";
+import { makeGamePlayer, makeGameRoom, makeUser } from "../../test-utils/fixtures";
 import { renderWithProviders } from "../../test-utils/render";
-import type { GameRoom, GameRoomPlayer, GameScoreboardRow, UserProfile } from "../../types/api";
+import type { GameRoom, GameScoreboardRow, UserProfile } from "../../types/api";
 import { GameHubPage } from "./GameHubPage";
 
 const { useGameScoreboard, useLiveGameRooms, navigate } = vi.hoisted(() => ({
@@ -12,7 +12,7 @@ const { useGameScoreboard, useLiveGameRooms, navigate } = vi.hoisted(() => ({
     navigate: vi.fn(),
 }));
 
-vi.mock("../../api/queries/gameRoom", () => ({ useGameScoreboard, useLiveGameRooms }));
+vi.mock("../../hooks/queries/gameRoom", () => ({ useGameScoreboard, useLiveGameRooms }));
 vi.mock("react-router", async importOriginal => {
     const actual = await importOriginal<typeof import("react-router")>();
     return { ...actual, useNavigate: () => navigate };
@@ -20,38 +20,19 @@ vi.mock("react-router", async importOriginal => {
 
 const viewer = makeUser({ id: "me", username: "me", display_name: "Me" });
 
-function makePlayer(overrides: Partial<GameRoomPlayer> = {}): GameRoomPlayer {
-    const id = overrides.user_id ?? "player-0";
-    return {
-        user_id: id,
-        username: "battler",
-        display_name: "Battler",
-        avatar_url: "",
-        role: "player",
-        slot: 0,
-        joined: true,
-        connected: true,
-        user: { id, username: "battler", display_name: "Battler" },
-        ...overrides,
-    };
-}
-
 function makeRoom(overrides: Partial<GameRoom> = {}): GameRoom {
-    return {
-        id: "room-1",
-        game_type: "chess",
-        status: "active",
-        state: {},
-        created_by: "a",
-        created_at: "2026-07-01T10:00:00Z",
-        updated_at: "2026-07-01T10:00:00Z",
-        players: [
-            makePlayer({ user_id: "a", slot: 0, display_name: "Battler" }),
-            makePlayer({ user_id: "b", slot: 1, display_name: "Beatrice" }),
-        ],
-        watcher_count: 3,
-        ...overrides,
-    };
+    return makeGameRoom(
+        {},
+        {
+            created_by: "a",
+            players: [
+                makeGamePlayer({ user_id: "a", slot: 0, display_name: "Battler" }),
+                makeGamePlayer({ user_id: "b", slot: 1, display_name: "Beatrice" }),
+            ],
+            watcher_count: 3,
+            ...overrides,
+        },
+    );
 }
 
 function makeScoreboardRow(overrides: Partial<GameScoreboardRow> = {}): GameScoreboardRow {
@@ -189,7 +170,7 @@ describe("GameHubPage", () => {
 
         // then
         expect(screen.getByText("Loading...")).toBeInTheDocument();
-        expect(screen.queryByText("Battler vs Beatrice")).not.toBeInTheDocument();
+        expect(screen.queryByRole("link", { name: /Battler vs Beatrice/ })).not.toBeInTheDocument();
     });
 
     it("keeps the live games on screen while only the scoreboard is still loading", () => {
@@ -200,7 +181,7 @@ describe("GameHubPage", () => {
         renderHub();
 
         // then
-        expect(screen.getByText("Battler vs Beatrice")).toBeInTheDocument();
+        expect(screen.getByRole("link", { name: /Battler vs Beatrice/ })).toBeInTheDocument();
     });
 
     it("waits on the scoreboard instead of calling it empty while it loads", () => {
@@ -234,7 +215,7 @@ describe("GameHubPage", () => {
         renderHub();
 
         // then
-        expect(screen.getByText("Battler vs Beatrice")).toBeInTheDocument();
+        expect(screen.getByRole("link", { name: /Battler vs Beatrice/ })).toBeInTheDocument();
         expect(screen.getByText("12 watching")).toBeInTheDocument();
         expect(screen.getByRole("link", { name: /Battler vs Beatrice/ })).toHaveAttribute(
             "href",
@@ -259,13 +240,13 @@ describe("GameHubPage", () => {
 
     it("marks an empty seat with a placeholder", () => {
         // given
-        stubHub({ rooms: [makeRoom({ players: [makePlayer({ user_id: "a", slot: 0 })] })] });
+        stubHub({ rooms: [makeRoom({ players: [makeGamePlayer({ user_id: "a", slot: 0 })] })] });
 
         // when
         renderHub();
 
         // then
-        expect(screen.getByText("Battler vs ?")).toBeInTheDocument();
+        expect(screen.getByRole("link", { name: /Battler vs \?/ })).toBeInTheDocument();
     });
 
     it("encourages the first finished match when the scoreboard is empty", () => {

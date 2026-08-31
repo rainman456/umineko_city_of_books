@@ -1,9 +1,9 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { makeUser } from "../../../test-utils/fixtures";
+import { makeGamePlayer, makeGameRoom, makeUser } from "../../../test-utils/fixtures";
 import { renderWithProviders } from "../../../test-utils/render";
-import type { ChessStats, GameRoom, GameRoomPlayer, User } from "../../../types/api";
+import type { ChessState, ChessStats, GameRoom, GameRoomPlayer, User } from "../../../types/api";
 import { ChessBoardView } from "./ChessBoardView";
 
 interface StubBoardOptions {
@@ -98,38 +98,24 @@ function emptyBoard(): Array<Array<BoardSquare | null>> {
 }
 
 function makePlayer(overrides: Partial<GameRoomPlayer> = {}): GameRoomPlayer {
-    const id = overrides.user_id ?? "u-white";
-    return {
-        user_id: id,
-        username: "battler",
-        display_name: "Battler",
-        avatar_url: "",
-        role: "player",
-        slot: 0,
-        joined: true,
-        connected: true,
-        user: { id, username: "battler", display_name: "Battler" },
-        ...overrides,
-    };
+    return makeGamePlayer({ user_id: "u-white", ...overrides });
 }
 
-function makeRoom(overrides: Partial<GameRoom> = {}): GameRoom {
-    return {
-        id: "room-1",
-        game_type: "chess",
-        status: "active",
-        state: { fen: START_FEN, pgn: "" },
-        turn_user_id: "u-white",
-        created_by: "u-white",
-        created_at: "2026-08-02T10:00:00.000Z",
-        updated_at: "2026-08-02T10:00:00.000Z",
-        players: [
-            makePlayer({ user_id: "u-white", slot: 0, display_name: "Battler" }),
-            makePlayer({ user_id: "u-black", slot: 1, display_name: "Beatrice", username: "beatrice" }),
-        ],
-        watcher_count: 0,
-        ...overrides,
-    };
+function makeRoom(overrides: Partial<GameRoom<ChessState, ChessStats>> = {}): GameRoom<ChessState, ChessStats> {
+    return makeGameRoom(
+        { fen: START_FEN, pgn: "" },
+        {
+            turn_user_id: "u-white",
+            created_by: "u-white",
+            created_at: "2026-08-02T10:00:00.000Z",
+            updated_at: "2026-08-02T10:00:00.000Z",
+            players: [
+                makePlayer({ user_id: "u-white", slot: 0, display_name: "Battler" }),
+                makePlayer({ user_id: "u-black", slot: 1, display_name: "Beatrice", username: "beatrice" }),
+            ],
+            ...overrides,
+        },
+    );
 }
 
 function makeStats(overrides: Partial<ChessStats> = {}): ChessStats {
@@ -148,7 +134,7 @@ function makeStats(overrides: Partial<ChessStats> = {}): ChessStats {
     };
 }
 
-function renderBoard(room: GameRoom, viewer: User | null, isSpectator = false) {
+function renderBoard(room: GameRoom<ChessState, ChessStats>, viewer: User | null, isSpectator = false) {
     return renderWithProviders(
         <ChessBoardView
             room={room}
@@ -193,7 +179,7 @@ describe("ChessBoardView", () => {
 
     it("falls back to the opening position when the room has no board yet", () => {
         // given
-        const room = makeRoom({ state: {} });
+        const room = makeRoom({ state: {} as ChessState });
 
         // when
         renderBoard(room, whiteViewer);

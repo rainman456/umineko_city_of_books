@@ -1,6 +1,6 @@
 import type { SubmitEvent } from "react";
 import { useSearchParams } from "react-router";
-import { useSiteSearch } from "../../api/queries/search";
+import { useSiteSearch } from "../../hooks/queries/search";
 import { Pagination } from "../../components/Pagination/Pagination";
 import { Input } from "../../components/Input/Input";
 import { Button } from "../../components/Button/Button";
@@ -132,9 +132,13 @@ export function SearchPage() {
             {queryParam && queryParam.trim().length >= 2 && (
                 <>
                     <div className={styles.summary}>
-                        {loading
-                            ? "Searching..."
-                            : `${total} ${total === 1 ? "result" : "results"} for "${queryParam}"`}
+                        {loading ? (
+                            "Searching..."
+                        ) : (
+                            <>
+                                {total} {total === 1 ? "result" : "results"} for "<bdi>{queryParam}</bdi>"
+                            </>
+                        )}
                         {fetching && !loading && <span className={styles.refetch}> updating...</span>}
                     </div>
 

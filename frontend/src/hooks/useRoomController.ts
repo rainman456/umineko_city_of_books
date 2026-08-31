@@ -1,397 +1,96 @@
-import { type Dispatch, type SetStateAction, useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useLocation, useNavigate, useParams } from "react-router";
-import { useAuth } from "./useAuth";
-import { useNotifications } from "./useNotifications";
-import { usePageTitle } from "./usePageTitle";
-import type { ChatMessage, ChatRoom, ChatRoomMember, User, WSMessage } from "../types/api";
-import { buildMentionMatcher } from "../utils/mentions";
-import { ROLE_GROUPS, type SiteRole } from "../utils/permissions";
-import { parseServerDate } from "../utils/time";
-import { useChatRoomMembers, useUserRooms } from "../api/queries/chat";
+import { useNavigate } from "react-router";
+import { typingNames as resolveTypingNames } from "../domain/chat/memberRoster";
+import { isTimeoutActive } from "../domain/chat/roomPolicy";
 import { queryKeys } from "../api/queryKeys";
-import {
-    useAddChatMessageReaction,
-    useBanChatRoomMember,
-    useClearChatRoomMemberTimeout,
-    useDeleteChatRoom,
-    useJoinChatRoom,
-    useKickChatRoomMember,
-    useLeaveChatRoom,
-    useMarkChatRoomRead,
-    usePinChatMessage,
-    useRemoveChatMessageReaction,
-    useSetChatRoomMemberNickname,
-    useSetChatRoomMemberTimeout,
-    useSetChatRoomMuted,
-    useUnlockChatRoomMemberNickname,
-    useUnpinChatMessage,
-} from "../api/mutations/chat";
-import { useChatMessageHandlers } from "./useChatMessageHandlers";
-import { useMessageHistory } from "./useMessageHistory";
-import { usePresenceReporter } from "./usePresenceReporter";
-import { useTypingIndicator } from "./useTypingIndicator";
-import { type ReplyTarget } from "../components/chat/ChatComposer/ChatComposer";
-import { useWatchParty } from "../components/chat/WatchParty/useWatchParty";
-import { useVoiceChat } from "../components/chat/Voice/useVoiceChat";
-import { useSiteInfo } from "./useSiteInfo";
-import {
-    applyChatMemberUpdate,
-    applyChatMessagePinned,
-    applyChatMessageUnpinned,
-    applyLocalMemberChange,
-    applyReactionAdded,
-    applyReactionRemoved,
-    applySharedChatWSBranch,
-    ChatMemberUpdatedPayload,
-    ChatMessagePinnedPayload,
-    ChatMessageUnpinnedPayload,
-    ChatReactionPayload,
-    ChatRoomUpdatedPayload,
-    handleIncomingChatMessage,
-    maybePlayChatMessageSound,
-} from "../utils/chatStream";
+import { useDeleteChatRoom, useJoinChatRoom, useLeaveChatRoom } from "./mutations/chat";
+import { useWatchParty } from "./useWatchParty";
+import { REALTIME_EVENTS } from "../api/realtime/events";
+import { useRealtimeEvent } from "../api/realtime/useRealtime";
+import { useChatThread } from "./useChatThread";
+import { useMessageAnchor } from "./chat/useMessageAnchor";
+import { useRoomMembers } from "./chat/useRoomMembers";
+import { useRoomModeration } from "./chat/useRoomModeration";
+import { useRoomViewPrefs } from "./chat/useRoomViewPrefs";
+import { useRoomWatchPartyInvite } from "./chat/useRoomWatchPartyInvite";
 
 const MAX_ROOM_MESSAGES = 300;
+const LEAVE_DELAY_MS = 1500;
+const TIMEOUT_TICK_MS = 30_000;
+const ROOMS_PATH = "/rooms";
+const DM_PATH = "/chat";
+
+const KICKED_MESSAGE = "You were removed from this room";
+const ROOM_DELETED_MESSAGE = "This room was deleted by the host";
+
+const ROOM_LIFECYCLE_EVENTS = [
+    REALTIME_EVENTS.CHAT_KICKED,
+    REALTIME_EVENTS.CHAT_ROOM_DELETED,
+    REALTIME_EVENTS.CHAT_ROOM_UPDATED,
+] as const;
+
+const PIN_EVENTS = [REALTIME_EVENTS.CHAT_MESSAGE_PINNED, REALTIME_EVENTS.CHAT_MESSAGE_UNPINNED] as const;
 
 export function useRoomController() {
-    const { roomId } = useParams<{ roomId: string }>();
+    const { thread, session, capabilities, toast } = useChatThread({
+        maxMessages: MAX_ROOM_MESSAGES,
+        requireMembership: true,
+    });
+
+    const roomId = thread.id;
+    const room = thread.data;
+    const setRoom = thread.set;
+    const user = session.viewer;
+    const setToast = toast.show;
+
     const navigate = useNavigate();
-    const location = useLocation();
-    const { user } = useAuth();
     const qc = useQueryClient();
-    const matchesViewerMention = useMemo(() => buildMentionMatcher(user?.username), [user?.username]);
-    const { addWSListener, sendWSMessage, wsEpoch } = useNotifications();
-    const [roomOverride, setRoomOverride] = useState<{ roomId: string | null; room: ChatRoom | null }>({
-        roomId: null,
-        room: null,
-    });
-    const [membersOverride, setMembersOverride] = useState<{ roomId: string | null; members: ChatRoomMember[] | null }>(
-        {
-            roomId: null,
-            members: null,
-        },
-    );
-    const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
-    const [toast, setToast] = useState<string | null>(null);
+
     const [joining, setJoining] = useState(false);
-    const [busy, setBusy] = useState<string | null>(null);
     const [mobileView, setMobileView] = useState<"members" | "chat">("chat");
-    const [replyingTo, setReplyingTo] = useState<ReplyTarget | null>(null);
-    const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
-    const [sidebarCollapsedOverride, setSidebarCollapsedOverride] = useState<{
-        roomId: string | null;
-        value: boolean | null;
-    }>({
-        roomId: null,
-        value: null,
-    });
-    const sidebarCollapsed = (() => {
-        if (!roomId) {
-            return false;
-        }
-        if (sidebarCollapsedOverride.roomId === roomId && sidebarCollapsedOverride.value !== null) {
-            return sidebarCollapsedOverride.value;
-        }
-        return localStorage.getItem(`ut-room-sidebar-collapsed-${roomId}`) === "1";
-    })();
-
-    function toggleSidebar() {
-        if (!roomId) {
-            return;
-        }
-        const next = !sidebarCollapsed;
-        try {
-            if (next) {
-                localStorage.setItem(`ut-room-sidebar-collapsed-${roomId}`, "1");
-            } else {
-                localStorage.removeItem(`ut-room-sidebar-collapsed-${roomId}`);
-            }
-        } catch {
-            setSidebarCollapsedOverride({ roomId, value: next });
-            return;
-        }
-        setSidebarCollapsedOverride({ roomId, value: next });
-    }
-    const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
-    const [presenceState, setPresenceState] = useState<{
-        roomId: string | null;
-        map: Record<string, "active" | "idle">;
-    }>({
-        roomId: null,
-        map: {},
-    });
-    const presenceMap = useMemo(
-        () => (presenceState.roomId === roomId ? presenceState.map : {}),
-        [presenceState, roomId],
-    );
-    const setPresenceMap = useCallback(
-        (updater: (prev: Record<string, "active" | "idle">) => Record<string, "active" | "idle">) => {
-            setPresenceState(prev => {
-                const base = prev.roomId === roomId ? prev.map : {};
-                return { roomId: roomId ?? null, map: updater(base) };
-            });
-        },
-        [roomId],
-    );
-    usePresenceReporter({ roomId, sendWSMessage, wsEpoch });
-    const { typingUserIds, noteTyping, clearUser: clearTypingUser } = useTypingIndicator(roomId);
-
-    const roomInfoStorageKey = roomId ? `roomInfoExpanded:${roomId}` : null;
-    const [descExpandedOverride, setDescExpandedOverride] = useState<{ key: string | null; value: boolean | null }>({
-        key: null,
-        value: null,
-    });
-    const descExpanded = (() => {
-        if (typeof window === "undefined") {
-            return true;
-        }
-        if (descExpandedOverride.key === roomInfoStorageKey && descExpandedOverride.value !== null) {
-            return descExpandedOverride.value;
-        }
-        if (roomInfoStorageKey) {
-            const stored = window.localStorage.getItem(roomInfoStorageKey);
-            if (stored !== null) {
-                return stored === "true";
-            }
-        }
-        return window.matchMedia("(min-width: 769px)").matches;
-    })();
-
-    function toggleDescExpanded() {
-        const next = !descExpanded;
-        if (roomInfoStorageKey) {
-            window.localStorage.setItem(roomInfoStorageKey, next ? "true" : "false");
-        }
-        setDescExpandedOverride({ key: roomInfoStorageKey, value: next });
-    }
     const [pinnedOpen, setPinnedOpen] = useState(false);
     const [searchOpen, setSearchOpen] = useState(false);
-    const [pinnedRefreshKey, setPinnedRefreshKey] = useState(0);
-    const watchParty = useWatchParty(roomId ?? null, user?.id ?? null);
-    const voiceEnabled = useSiteInfo()?.voice_enabled ?? false;
+    const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
     const [editProfileOpen, setEditProfileOpen] = useState(false);
     const [inviteModalOpen, setInviteModalOpen] = useState(false);
     const [moderationDialogOpen, setModerationDialogOpen] = useState(false);
-    const [openMemberMenu, setOpenMemberMenu] = useState<string | null>(null);
-    const [nicknameDialogTarget, setNicknameDialogTarget] = useState<ChatRoomMember | null>(null);
-    const [nicknameDialogValue, setNicknameDialogValue] = useState("");
-    const [nicknameDialogError, setNicknameDialogError] = useState<string>("");
-    const [nicknameDialogSaving, setNicknameDialogSaving] = useState(false);
-    const [timeoutDialogTarget, setTimeoutDialogTarget] = useState<ChatRoomMember | null>(null);
-    const [timeoutDialogAmount, setTimeoutDialogAmount] = useState("1");
-    const [timeoutDialogUnit, setTimeoutDialogUnit] = useState("hours");
-    const [timeoutDialogError, setTimeoutDialogError] = useState("");
-    const [timeoutDialogSaving, setTimeoutDialogSaving] = useState(false);
-    const roomIdRef = useRef(roomId);
-    const roomMutedRef = useRef(false);
 
-    const userRoomsQuery = useUserRooms();
-    const userRoomsLoading = userRoomsQuery.loading;
-    const userRoomsList = userRoomsQuery.rooms;
-    const baseRoom = roomId ? (userRoomsList.find(r => r.id === roomId) ?? null) : null;
-    const room = roomOverride.roomId === roomId && roomOverride.room ? roomOverride.room : baseRoom;
-    const voiceParticipants = useMemo(() => room?.voice_participants ?? [], [room?.voice_participants]);
-    const voice = useVoiceChat(roomId ?? "", voiceParticipants);
-    const voiceIdSet = useMemo(() => new Set(voice.participantIds), [voice.participantIds]);
-    const loading = !!roomId && userRoomsLoading;
-    const setRoom: Dispatch<SetStateAction<ChatRoom | null>> = useCallback(
-        updater => {
-            setRoomOverride(prev => {
-                const baseValue = prev.roomId === roomId && prev.room ? prev.room : baseRoom;
-                const next =
-                    typeof updater === "function"
-                        ? (updater as (p: ChatRoom | null) => ChatRoom | null)(baseValue)
-                        : updater;
-                return { roomId: roomId ?? null, room: next };
-            });
-        },
-        [roomId, baseRoom],
-    );
+    const prefs = useRoomViewPrefs(roomId);
+    const watchParty = useWatchParty(roomId ?? null, user?.id ?? null);
 
-    const membersQuery = useChatRoomMembers(roomId ?? "", !!roomId && !!room);
-    const membersRefresh = membersQuery.refresh;
-    const baseMembers = membersQuery.members;
-    const members =
-        membersOverride.roomId === roomId && membersOverride.members ? membersOverride.members : baseMembers;
-    const setMembers: Dispatch<SetStateAction<ChatRoomMember[]>> = useCallback(
-        updater => {
-            setMembersOverride(prev => {
-                const baseValue = prev.roomId === roomId && prev.members ? prev.members : baseMembers;
-                const next =
-                    typeof updater === "function"
-                        ? (updater as (p: ChatRoomMember[]) => ChatRoomMember[])(baseValue)
-                        : updater;
-                return { roomId: roomId ?? null, members: next };
-            });
-        },
-        [roomId, baseMembers],
-    );
-
-    const presenceMapMerged = useMemo(() => {
-        const seed: Record<string, "active" | "idle"> = {};
-        for (const m of baseMembers) {
-            if (m.presence === "active" || m.presence === "idle") {
-                seed[m.user.id] = m.presence;
-            }
-        }
-
-        return { ...seed, ...presenceMap };
-    }, [baseMembers, presenceMap]);
-
-    const memberOnlineWeight = useCallback(
-        (id: string) => {
-            const p = presenceMapMerged[id];
-            if (p === "active" || p === "idle") {
-                return 0;
-            }
-            return 1;
-        },
-        [presenceMapMerged],
-    );
-    const memberRankWeight = (m: ChatRoomMember) => {
-        if (m.user.role === "super_admin") {
-            return 0;
-        }
-
-        if (m.role === "host") {
-            return 1;
-        }
-
-        const idx = ROLE_GROUPS.findIndex(g => g.role === m.user.role);
-        if (idx >= 0) {
-            return idx + 1;
-        }
-
-        return ROLE_GROUPS.length + 1;
-    };
-    const memberSortName = (m: ChatRoomMember) => {
-        const nickname = m.nickname?.trim();
-        if (nickname) {
-            return nickname.toLowerCase();
-        }
-        const displayName = m.user.display_name?.trim();
-        if (displayName) {
-            return displayName.toLowerCase();
-        }
-        return m.user.username.toLowerCase();
-    };
-    const memberRankLabel = (m: ChatRoomMember) => {
-        const group = ROLE_GROUPS.find(g => g.role === m.user.role);
-        if (m.user.role === "super_admin" && group) {
-            return group.label;
-        }
-
-        if (m.role === "host") {
-            return "Host";
-        }
-
-        if (group) {
-            return group.label;
-        }
-
-        return "Members";
-    };
-    const sortedMembers = useMemo(() => {
-        return [...members].sort((a, b) => {
-            const rank = memberRankWeight(a) - memberRankWeight(b);
-            if (rank !== 0) {
-                return rank;
-            }
-
-            const online = memberOnlineWeight(a.user.id) - memberOnlineWeight(b.user.id);
-            if (online !== 0) {
-                return online;
-            }
-
-            return memberSortName(a).localeCompare(memberSortName(b));
-        });
-    }, [members, memberOnlineWeight]);
-    const memberGroups = useMemo(() => {
-        const groups: { label: string; members: ChatRoomMember[] }[] = [];
-        for (const m of sortedMembers) {
-            const label = memberRankLabel(m);
-            const last = groups[groups.length - 1];
-            if (last && last.label === label) {
-                last.members.push(m);
-            } else {
-                groups.push({ label, members: [m] });
-            }
-        }
-
-        const inVoiceMembers = sortedMembers.filter(m => voiceIdSet.has(m.user.id));
-        if (inVoiceMembers.length > 0) {
-            groups.unshift({ label: "In Voice", members: inVoiceMembers });
-        }
-
-        return groups;
-    }, [sortedMembers, voiceIdSet]);
-
-    const {
-        messages,
-        setMessages,
-        hasMore,
-        loadingMore,
-        containerRef: messagesContainerRef,
-        contentRef: messagesContentRef,
-        endRef: messagesEndRef,
-        scrollToBottom,
-        handleScroll: handleMessagesScroll,
-        addMessage,
-        loadUntilMessage,
-        resync,
-    } = useMessageHistory(room ? roomId : undefined, editingMessageId === null ? MAX_ROOM_MESSAGES : undefined);
-
-    const didResyncMountRef = useRef(false);
+    const roomIsDM = room?.type === "dm";
     useEffect(() => {
-        if (!didResyncMountRef.current) {
-            didResyncMountRef.current = true;
+        if (!roomId || !roomIsDM) {
             return;
         }
 
-        resync().catch(() => {});
-    }, [wsEpoch, resync]);
+        navigate(`${DM_PATH}/${roomId}`, { replace: true });
+    }, [roomId, roomIsDM, navigate]);
 
-    const targetMsgId = location.hash.startsWith("#msg-") ? location.hash.slice(5) : null;
-    const targetMsgCreatedAt = new URLSearchParams(location.search).get("at") ?? undefined;
-    const [handledHash, setHandledHash] = useState<string | null>(null);
-    const hashLoadRef = useRef<string | null>(null);
-    const pendingTargetMsgId = targetMsgId && handledHash !== targetMsgId ? targetMsgId : null;
+    const changeMemberCount = useCallback(
+        (delta: number) => {
+            setRoom(prev => {
+                if (!prev) {
+                    return prev;
+                }
 
-    const invitedPartyId = new URLSearchParams(location.search).get("party");
-    const handledPartyRef = useRef<string | null>(null);
-    const [invitedPartyOpened, setInvitedPartyOpened] = useState(false);
-    const {
-        loaded: watchPartyLoaded,
-        sessions: watchPartySessions,
-        join: joinWatchParty,
-        refresh: refreshWatchParties,
-    } = watchParty;
+                const current = prev.member_count ?? prev.members.length;
 
-    const invitedPartyResolved = !!invitedPartyId && !!room && watchPartyLoaded;
-    const invitedPartyMissing =
-        invitedPartyResolved && !invitedPartyOpened && !watchPartySessions.some(s => s.id === invitedPartyId);
-
-    useEffect(() => {
-        if (!invitedPartyResolved || invitedPartyMissing || !invitedPartyId) {
-            return;
-        }
-        if (handledPartyRef.current === invitedPartyId) {
-            return;
-        }
-
-        handledPartyRef.current = invitedPartyId;
-
-        joinWatchParty(invitedPartyId)
-            .then(() => {
-                setInvitedPartyOpened(true);
-            })
-            .catch(() => {
-                setToast("Could not open that watch party.");
+                return { ...prev, member_count: Math.max(0, current + delta) };
             });
-    }, [invitedPartyId, invitedPartyResolved, invitedPartyMissing, joinWatchParty]);
+        },
+        [setRoom],
+    );
 
-    const currentMember = members.find(m => m.user.id === user?.id) ?? null;
+    const { members, setMembers, memberGroups, presenceMapMerged, memberOnlineWeight, currentMember } = useRoomMembers({
+        roomId,
+        enabled: !!roomId && !!room,
+        viewerId: user?.id,
+        voiceParticipantIds: thread.voice.participantIds,
+        onMemberCountDelta: changeMemberCount,
+    });
+
     const viewerTimeoutUntil = currentMember?.timeout_until ?? undefined;
 
     const [nowTick, setNowTick] = useState(() => Date.now());
@@ -401,7 +100,7 @@ export function useRoomController() {
         }
 
         const reseed = setTimeout(() => setNowTick(Date.now()), 0);
-        const t = setInterval(() => setNowTick(Date.now()), 30_000);
+        const t = setInterval(() => setNowTick(Date.now()), TIMEOUT_TICK_MS);
 
         return () => {
             clearTimeout(reseed);
@@ -409,333 +108,79 @@ export function useRoomController() {
         };
     }, [viewerTimeoutUntil]);
 
-    const viewerTimedOutDate = parseServerDate(viewerTimeoutUntil);
-    const viewerTimedOut = viewerTimedOutDate ? viewerTimedOutDate.getTime() > nowTick : false;
+    const viewerTimedOut = isTimeoutActive(viewerTimeoutUntil, nowTick);
 
-    const { handleDeleteMessage, handleEditMessage, handleEditLast } = useChatMessageHandlers({
-        user,
+    const { messages, history } = session;
+    const { setMessages, loadUntilMessage } = history;
+
+    const moderation = useRoomModeration({ roomId, setMembers, setMessages, notify: setToast });
+    const { setBusy } = moderation;
+
+    const { highlightedMsgId, handleJumpToMessage } = useMessageAnchor({
         messages,
-        setMessages,
-        setEditingMessageId,
-        onError: (msg: string) => setToast(msg),
-        editLastBlocked: viewerTimedOut,
+        loadUntilMessage,
+        onError: setToast,
     });
 
-    usePageTitle(room?.name ?? "Chat Room");
+    const { invitedPartyMissing } = useRoomWatchPartyInvite({
+        roomReady: !!room,
+        loaded: watchParty.loaded,
+        sessions: watchParty.sessions,
+        join: watchParty.join,
+        onError: setToast,
+    });
 
-    useEffect(() => {
-        roomIdRef.current = roomId;
-    }, [roomId]);
-
-    useEffect(() => {
-        roomMutedRef.current = room?.viewer_muted ?? false;
-    }, [room?.viewer_muted]);
-
-    useEffect(() => {
-        if (!toast) {
-            return;
-        }
-        const t = setTimeout(() => setToast(null), 4000);
-        return () => clearTimeout(t);
-    }, [toast]);
-
-    useEffect(() => {
-        if (!pendingTargetMsgId || messages.length === 0) {
-            return;
-        }
-        if (!messages.some(m => m.id === pendingTargetMsgId)) {
-            if (hashLoadRef.current !== pendingTargetMsgId) {
-                hashLoadRef.current = pendingTargetMsgId;
-                loadUntilMessage(pendingTargetMsgId, targetMsgCreatedAt).then(found => {
-                    if (!found) {
-                        setHandledHash(pendingTargetMsgId);
-                    }
-                });
-            }
-            return;
-        }
-        const t = setTimeout(() => {
-            const el = document.getElementById(`chat-msg-${pendingTargetMsgId}`);
-            if (el) {
-                el.scrollIntoView({ behavior: "smooth", block: "center" });
-                setHighlightedMsgId(pendingTargetMsgId);
-                setHandledHash(pendingTargetMsgId);
-            }
-        }, 300);
-        return () => clearTimeout(t);
-    }, [pendingTargetMsgId, targetMsgCreatedAt, messages, loadUntilMessage]);
-
-    useEffect(() => {
-        if (!highlightedMsgId) {
-            return;
-        }
-        const t = setTimeout(() => setHighlightedMsgId(null), 3000);
-        return () => clearTimeout(t);
-    }, [highlightedMsgId]);
-
-    const markReadMutation = useMarkChatRoomRead();
-    const markRead = markReadMutation.mutate;
-    const lastMarkedReadRef = useRef<string | null>(null);
     const joinRoomMutation = useJoinChatRoom();
     const leaveRoomMutation = useLeaveChatRoom();
     const deleteRoomMutation = useDeleteChatRoom();
-    const setMutedMutation = useSetChatRoomMuted();
-    const kickMutation = useKickChatRoomMember(roomId ?? "");
-    const banMutation = useBanChatRoomMember(roomId ?? "");
-    const setNicknameMutation = useSetChatRoomMemberNickname(roomId ?? "");
-    const unlockNicknameMutation = useUnlockChatRoomMemberNickname(roomId ?? "");
-    const setTimeoutMutation = useSetChatRoomMemberTimeout(roomId ?? "");
-    const clearTimeoutMutation = useClearChatRoomMemberTimeout(roomId ?? "");
-    const pinMutation = usePinChatMessage(roomId ?? undefined);
-    const unpinMutation = useUnpinChatMessage(roomId ?? undefined);
-    const addReactionMutation = useAddChatMessageReaction();
-    const removeReactionMutation = useRemoveChatMessageReaction();
 
-    const loadMembers = useCallback(() => {
-        membersRefresh();
-    }, [membersRefresh]);
-
-    const roomReadyForMarking = !!room;
-    const roomLastMessageAt = room?.last_message_at;
-    useEffect(() => {
-        if (!roomId || !roomReadyForMarking) {
+    useRealtimeEvent(ROOM_LIFECYCLE_EVENTS, event => {
+        if (!user || event.data.room_id !== roomId) {
             return;
         }
 
-        const signal = `${roomId}:${roomLastMessageAt ?? ""}`;
-        if (lastMarkedReadRef.current === signal) {
+        if (event.type === REALTIME_EVENTS.CHAT_KICKED) {
+            const { reason } = event.data;
+            setToast(reason ? `${KICKED_MESSAGE}: ${reason}` : KICKED_MESSAGE);
+            setTimeout(() => navigate(ROOMS_PATH), LEAVE_DELAY_MS);
             return;
         }
 
-        lastMarkedReadRef.current = signal;
-        markRead(roomId);
-    }, [roomId, roomReadyForMarking, roomLastMessageAt, markRead]);
-
-    const isRoomMember = !!room;
-
-    useEffect(() => {
-        if (!roomId || !isRoomMember) {
+        if (event.type === REALTIME_EVENTS.CHAT_ROOM_DELETED) {
+            setToast(ROOM_DELETED_MESSAGE);
+            setTimeout(() => navigate(ROOMS_PATH), LEAVE_DELAY_MS);
             return;
         }
-        sendWSMessage({ type: "join_room", data: { room_id: roomId } });
-        return () => {
-            sendWSMessage({ type: "leave_room", data: { room_id: roomId } });
-        };
-    }, [roomId, isRoomMember, sendWSMessage, wsEpoch]);
 
-    useEffect(() => {
-        if (!user) {
-            return;
-        }
-        return addWSListener((msg: WSMessage) => {
-            if (msg.type === "chat_message") {
-                const chatMsg = msg.data as ChatMessage;
-                const added = handleIncomingChatMessage(
-                    chatMsg,
-                    roomIdRef.current ?? null,
-                    setMessages,
-                    scrollToBottom,
-                );
-                if (added && user) {
-                    maybePlayChatMessageSound({
-                        senderId: chatMsg.sender.id,
-                        currentUserId: user.id,
-                        roomMuted: roomMutedRef.current,
-                        enabled: user.private?.play_message_sound ?? true,
-                    });
-                }
-                return;
+        const update = event.data;
+        setRoom(prev => {
+            if (!prev) {
+                return prev;
             }
-            if (msg.type === "chat_member_joined") {
-                const data = msg.data as { room_id: string; user: User };
-                if (data.room_id !== roomIdRef.current) {
-                    return;
-                }
-                loadMembers();
-                setRoom(prev => {
-                    if (!prev) {
-                        return prev;
-                    }
-                    return {
-                        ...prev,
-                        member_count: (prev.member_count ?? prev.members.length) + 1,
-                    };
-                });
-                return;
-            }
-            if (msg.type === "chat_member_left") {
-                const data = msg.data as { room_id: string; user_id: string };
-                if (data.room_id !== roomIdRef.current) {
-                    return;
-                }
-                setMembers(prev => prev.filter(m => m.user.id !== data.user_id));
-                setRoom(prev => {
-                    if (!prev) {
-                        return prev;
-                    }
-                    return {
-                        ...prev,
-                        member_count: Math.max(0, (prev.member_count ?? prev.members.length) - 1),
-                    };
-                });
-                return;
-            }
-            if (msg.type === "chat_kicked") {
-                const data = msg.data as { room_id: string; reason?: string };
-                if (data.room_id !== roomIdRef.current) {
-                    return;
-                }
-                const baseMessage = "You were removed from this room";
-                setToast(data.reason ? `${baseMessage}: ${data.reason}` : baseMessage);
-                setTimeout(() => navigate("/rooms"), 1500);
-                return;
-            }
-            if (msg.type === "chat_room_deleted") {
-                const data = msg.data as { room_id: string };
-                if (data.room_id !== roomIdRef.current) {
-                    return;
-                }
-                setToast("This room was deleted by the host");
-                setTimeout(() => navigate("/rooms"), 1500);
-                return;
-            }
-            if (msg.type === "chat_room_updated") {
-                const data = msg.data as ChatRoomUpdatedPayload;
-                if (data.room_id !== roomIdRef.current) {
-                    return;
-                }
-                setRoom(prev => {
-                    if (!prev) {
-                        return prev;
-                    }
-                    return {
-                        ...prev,
-                        name: data.name,
-                        description: data.description,
-                        tags: data.tags ?? [],
-                        is_public: data.is_public,
-                        is_rp: data.is_rp,
-                    };
-                });
-                qc.invalidateQueries({ queryKey: queryKeys.chat.rooms() });
-                qc.invalidateQueries({ queryKey: queryKeys.chat.roomsList() });
-                return;
-            }
-            if (msg.type === "chat_member_updated") {
-                const data = msg.data as ChatMemberUpdatedPayload;
-                if (data.room_id !== roomIdRef.current) {
-                    return;
-                }
-                applyChatMemberUpdate(data, setMembers, setMessages);
-                return;
-            }
-            if (msg.type === "chat_message_pinned") {
-                const data = msg.data as ChatMessagePinnedPayload;
-                if (data.room_id !== roomIdRef.current) {
-                    return;
-                }
-                applyChatMessagePinned(data, setMessages);
-                setPinnedRefreshKey(k => k + 1);
-                return;
-            }
-            if (msg.type === "chat_message_unpinned") {
-                const data = msg.data as ChatMessageUnpinnedPayload;
-                if (data.room_id !== roomIdRef.current) {
-                    return;
-                }
-                applyChatMessageUnpinned(data, setMessages);
-                setPinnedRefreshKey(k => k + 1);
-                return;
-            }
-            if (msg.type === "chat_reaction_added") {
-                const data = msg.data as ChatReactionPayload;
-                if (data.room_id !== roomIdRef.current) {
-                    return;
-                }
-                applyReactionAdded(data, user.id, setMessages);
-                return;
-            }
-            if (msg.type === "chat_reaction_removed") {
-                const data = msg.data as ChatReactionPayload;
-                if (data.room_id !== roomIdRef.current) {
-                    return;
-                }
-                applyReactionRemoved(data, user.id, setMessages);
-                return;
-            }
-            if (msg.type === "chat_presence_changed") {
-                const data = msg.data as { room_id: string; user_id: string; state: string };
-                if (data.room_id !== roomIdRef.current) {
-                    return;
-                }
-                setPresenceMap(prev => {
-                    const next = { ...prev };
-                    if (data.state === "active" || data.state === "idle") {
-                        next[data.user_id] = data.state;
-                    } else {
-                        delete next[data.user_id];
-                    }
-                    return next;
-                });
-                return;
-            }
-            if (
-                applySharedChatWSBranch(msg, {
-                    activeRoomId: roomIdRef.current ?? null,
-                    setMessages,
-                    noteTyping,
-                })
-            ) {
-                return;
-            }
-            if (msg.type === "chat_message") {
-                const chatMsg = msg.data as ChatMessage;
-                if (chatMsg.room_id === roomIdRef.current) {
-                    clearTypingUser(chatMsg.sender.id);
-                }
-            }
-            if (msg.type === "role_changed") {
-                const data = msg.data as { user_id?: string; role?: string };
-                if (!data.user_id) {
-                    return;
-                }
-                const newRole = (data.role ?? "") as SiteRole;
-                setMembers(prev =>
-                    prev.map(m => {
-                        if (m.user.id !== data.user_id) {
-                            return m;
-                        }
-                        return { ...m, user: { ...m.user, role: newRole || undefined } };
-                    }),
-                );
-                setMessages(prev =>
-                    prev.map(m => {
-                        if (m.sender.id !== data.user_id) {
-                            return m;
-                        }
-                        return { ...m, sender: { ...m.sender, role: newRole || undefined } };
-                    }),
-                );
-            }
+
+            return {
+                ...prev,
+                name: update.name,
+                description: update.description,
+                tags: update.tags ?? [],
+                is_public: update.is_public,
+                is_rp: update.is_rp,
+            };
         });
-    }, [
-        user,
-        addWSListener,
-        scrollToBottom,
-        setMessages,
-        navigate,
-        loadMembers,
-        noteTyping,
-        clearTypingUser,
-        setMembers,
-        setPresenceMap,
-        setRoom,
-        qc,
-    ]);
+        qc.invalidateQueries({ queryKey: queryKeys.chat.rooms() });
+        qc.invalidateQueries({ queryKey: queryKeys.chat.roomsList() });
+    });
 
-    function handleSentMessage(message: ChatMessage) {
-        addMessage(message);
-        scrollToBottom({ force: true });
+    useRealtimeEvent(PIN_EVENTS, event => {
+        if (!user || !roomId || event.data.room_id !== roomId) {
+            return;
+        }
+
+        qc.invalidateQueries({ queryKey: queryKeys.chat.pinned(roomId) });
+    });
+
+    function backToRooms() {
+        navigate(ROOMS_PATH);
     }
 
     async function handleJoin() {
@@ -746,176 +191,11 @@ export function useRoomController() {
         try {
             const joined = await joinRoomMutation.mutateAsync({ roomId });
             setRoom(joined);
-            await refreshWatchParties();
+            await watchParty.refresh();
         } catch (err) {
             setToast(err instanceof Error ? err.message : "Failed to join room");
         } finally {
             setJoining(false);
-        }
-    }
-
-    function openNicknameDialog(member: ChatRoomMember) {
-        setNicknameDialogTarget(member);
-        setNicknameDialogValue(member.nickname ?? "");
-        setNicknameDialogError("");
-        setOpenMemberMenu(null);
-    }
-
-    function openTimeoutDialog(member: ChatRoomMember) {
-        setTimeoutDialogTarget(member);
-        setTimeoutDialogAmount("1");
-        setTimeoutDialogUnit("hours");
-        setTimeoutDialogError("");
-        setOpenMemberMenu(null);
-    }
-
-    function formatTimeoutUntil(value?: string): string {
-        if (!value) {
-            return "";
-        }
-        const parsed = parseServerDate(value);
-        if (!parsed) {
-            return value;
-        }
-        return parsed.toLocaleString();
-    }
-
-    async function handleModSetNickname() {
-        if (!roomId || !nicknameDialogTarget) {
-            return;
-        }
-        setNicknameDialogSaving(true);
-        setNicknameDialogError("");
-        try {
-            const updated = await setNicknameMutation.mutateAsync({
-                userId: nicknameDialogTarget.user.id,
-                nickname: nicknameDialogValue.trim(),
-            });
-            applyLocalMemberChange(updated, setMembers, setMessages);
-            setNicknameDialogTarget(null);
-        } catch (err) {
-            setNicknameDialogError(err instanceof Error ? err.message : "Failed to set nickname");
-        } finally {
-            setNicknameDialogSaving(false);
-        }
-    }
-
-    async function handleModUnlockNickname(targetId: string) {
-        if (!roomId) {
-            return;
-        }
-        setBusy(targetId);
-        setOpenMemberMenu(null);
-        try {
-            const updated = await unlockNicknameMutation.mutateAsync(targetId);
-            applyLocalMemberChange(updated, setMembers, setMessages);
-        } catch (err) {
-            setToast(err instanceof Error ? err.message : "Failed to unlock nickname");
-        } finally {
-            setBusy(null);
-        }
-    }
-
-    async function handleSetTimeout() {
-        if (!roomId || !timeoutDialogTarget) {
-            return;
-        }
-        const amount = Number(timeoutDialogAmount);
-        if (!Number.isInteger(amount) || amount <= 0) {
-            setTimeoutDialogError("Enter a whole number greater than zero");
-            return;
-        }
-
-        setTimeoutDialogSaving(true);
-        setTimeoutDialogError("");
-        try {
-            const updated = await setTimeoutMutation.mutateAsync({
-                userId: timeoutDialogTarget.user.id,
-                amount,
-                unit: timeoutDialogUnit,
-            });
-            setMembers(prev => prev.map(m => (m.user.id === updated.user.id ? updated : m)));
-            setTimeoutDialogTarget(null);
-        } catch (err) {
-            setTimeoutDialogError(err instanceof Error ? err.message : "Failed to set timeout");
-        } finally {
-            setTimeoutDialogSaving(false);
-        }
-    }
-
-    async function handleClearTimeout(targetId: string) {
-        if (!roomId) {
-            return;
-        }
-        setBusy(`timeout:${targetId}`);
-        setOpenMemberMenu(null);
-        try {
-            const updated = await clearTimeoutMutation.mutateAsync(targetId);
-            setMembers(prev => prev.map(m => (m.user.id === updated.user.id ? updated : m)));
-        } catch (err) {
-            setToast(err instanceof Error ? err.message : "Failed to clear timeout");
-        } finally {
-            setBusy(null);
-        }
-    }
-
-    async function handleKick(targetId: string) {
-        if (!roomId || !window.confirm("Kick this member from the room?")) {
-            return;
-        }
-        setBusy(targetId);
-        try {
-            await kickMutation.mutateAsync(targetId);
-            setMembers(prev => prev.filter(m => m.user.id !== targetId));
-        } catch (err) {
-            setToast(err instanceof Error ? err.message : "Failed to kick");
-        } finally {
-            setBusy(null);
-        }
-    }
-
-    async function handleBan(targetId: string) {
-        if (!roomId) {
-            return;
-        }
-        const reason = window.prompt(
-            "Ban this member from the room? They will not be able to rejoin or see the room. Optional reason:",
-            "",
-        );
-        if (reason === null) {
-            return;
-        }
-        setBusy(targetId);
-        try {
-            await banMutation.mutateAsync({ userId: targetId, reason });
-            setMembers(prev => prev.filter(m => m.user.id !== targetId));
-            setToast("Member banned from the room.");
-        } catch (err) {
-            setToast(err instanceof Error ? err.message : "Failed to ban");
-        } finally {
-            setBusy(null);
-        }
-    }
-
-    async function handleToggleMute() {
-        if (!roomId || !room) {
-            return;
-        }
-        setBusy("mute");
-        const next = !room.viewer_muted;
-        try {
-            await setMutedMutation.mutateAsync({ roomId, muted: next });
-            setRoom(prev => {
-                if (!prev) {
-                    return prev;
-                }
-                return { ...prev, viewer_muted: next };
-            });
-            setToast(next ? "Notifications muted" : "Notifications unmuted");
-        } catch (err) {
-            setToast(err instanceof Error ? err.message : "Failed to update mute");
-        } finally {
-            setBusy(null);
         }
     }
 
@@ -926,7 +206,7 @@ export function useRoomController() {
         setBusy("self");
         try {
             await leaveRoomMutation.mutateAsync(roomId);
-            navigate("/rooms");
+            navigate(ROOMS_PATH);
         } catch (err) {
             setToast(err instanceof Error ? err.message : "Failed to leave");
             setBusy(null);
@@ -940,173 +220,106 @@ export function useRoomController() {
         setBusy("delete");
         try {
             await deleteRoomMutation.mutateAsync(roomId);
-            navigate("/rooms");
+            navigate(ROOMS_PATH);
         } catch (err) {
             setToast(err instanceof Error ? err.message : "Failed to delete");
             setBusy(null);
         }
     }
 
-    async function handleReactionToggle(message: ChatMessage, emoji: string) {
-        const existing = (message.reactions ?? []).find(r => r.emoji === emoji);
-        try {
-            if (existing && existing.viewer_reacted) {
-                await removeReactionMutation.mutateAsync({ messageId: message.id, emoji });
-            } else {
-                await addReactionMutation.mutateAsync({ messageId: message.id, emoji });
-            }
-        } catch (err) {
-            setToast(err instanceof Error ? err.message : "Failed to update reaction");
-        }
-    }
-
-    async function handlePinToggle(message: ChatMessage) {
-        try {
-            if (message.pinned) {
-                await unpinMutation.mutateAsync(message.id);
-            } else {
-                await pinMutation.mutateAsync(message.id);
-            }
-        } catch (err) {
-            setToast(err instanceof Error ? err.message : "Failed to update pin");
-        }
-    }
-
-    async function handleJumpToMessage(messageId: string, targetCreatedAt?: string) {
-        const scrollToEl = (smooth: boolean) => {
-            const el = document.getElementById(`chat-msg-${messageId}`);
-            if (el) {
-                el.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "center" });
-                setHighlightedMsgId(messageId);
-            }
-        };
-        if (messages.some(m => m.id === messageId)) {
-            scrollToEl(true);
+    const editLastMessage = session.editLast;
+    const handleEditLast = useCallback(() => {
+        if (viewerTimedOut) {
             return;
         }
-        const found = await loadUntilMessage(messageId, targetCreatedAt);
-        if (!found) {
-            setToast("Couldn't locate that message.");
-            return;
-        }
-        requestAnimationFrame(() => scrollToEl(false));
-        setTimeout(() => scrollToEl(false), 300);
-        setTimeout(() => scrollToEl(true), 600);
-    }
 
-    const typingNames = typingUserIds
-        .filter(id => id !== user?.id)
-        .map(id => {
-            const m = members.find(mem => mem.user.id === id);
-            if (!m) {
-                return "Someone";
-            }
+        editLastMessage();
+    }, [viewerTimedOut, editLastMessage]);
 
-            if (m.nickname && m.nickname.trim() !== "") {
-                return m.nickname;
-            }
-
-            if (m.user.display_name && m.user.display_name.trim() !== "") {
-                return m.user.display_name;
-            }
-
-            return m.user.username;
-        });
+    const typingNames = resolveTypingNames(session.typingUserIds, members, user?.id);
 
     return {
-        user,
-        navigate,
-        loading,
-        room,
-        roomId,
-        members,
-        memberGroups,
-        presenceMapMerged,
-        memberOnlineWeight,
-        currentMember,
-        mobileView,
-        setMobileView,
-        sidebarCollapsed,
-        toggleSidebar,
-        descExpanded,
-        toggleDescExpanded,
-        messages,
-        hasMore,
-        loadingMore,
-        messagesContainerRef,
-        messagesContentRef,
-        messagesEndRef,
-        handleMessagesScroll,
-        scrollToBottom,
-        highlightedMsgId,
-        matchesViewerMention,
-        typingNames,
-        voice,
-        voiceEnabled,
-        watchParty,
-        invitedPartyMissing,
-        replyingTo,
-        setReplyingTo,
-        editingMessageId,
-        setEditingMessageId,
-        viewerTimeoutUntil,
-        viewerTimedOut,
-        lightboxSrc,
-        setLightboxSrc,
+        room: {
+            data: room,
+            id: roomId,
+            loading: thread.loading,
+            joining,
+            viewerTimeoutUntil,
+            viewerTimedOut,
+            set: setRoom,
+            join: handleJoin,
+            toggleMute: thread.toggleMute,
+            leave: handleLeave,
+            remove: handleDelete,
+            backToRooms,
+        },
+        session: {
+            viewer: user,
+            messages,
+            hasMore: session.hasMore,
+            loadingMore: session.loadingMore,
+            containerRef: session.containerRef,
+            contentRef: session.contentRef,
+            endRef: session.endRef,
+            onScroll: session.onScroll,
+            toBottom: session.toBottom,
+            editingMessageId: session.editingMessageId,
+            startEditing: session.startEditing,
+            cancelEditing: session.cancelEditing,
+            replyingTo: session.replyingTo,
+            setReplyingTo: session.setReplyingTo,
+            typingNames,
+            notifyTyping: session.notifyTyping,
+            matchesViewerMention: session.matchesViewerMention,
+            onSent: session.onSent,
+            deleteMessage: session.deleteMessage,
+            editMessage: session.editMessage,
+            editLast: handleEditLast,
+            toggleReaction: session.toggleReaction,
+            togglePin: session.togglePin,
+        },
+        members: {
+            list: members,
+            groups: memberGroups,
+            presence: presenceMapMerged,
+            onlineWeight: memberOnlineWeight,
+            current: currentMember,
+            set: setMembers,
+        },
+        moderation: {
+            ...moderation,
+            busy: thread.mutePending ? "mute" : moderation.busy,
+        },
+        capabilities,
+        prefs: {
+            sidebarCollapsed: prefs.sidebarCollapsed,
+            toggleSidebar: prefs.toggleSidebar,
+            descExpanded: prefs.descExpanded,
+            toggleDescExpanded: prefs.toggleDescExpanded,
+            mobileView,
+            setMobileView,
+        },
+        anchor: {
+            highlightedMsgId,
+            jumpTo: handleJumpToMessage,
+        },
+        voice: thread.voice,
+        watchParty: { ...watchParty, invitedPartyMissing },
+        panels: {
+            pinnedOpen,
+            setPinnedOpen,
+            searchOpen,
+            setSearchOpen,
+            lightboxSrc,
+            setLightboxSrc,
+            editProfileOpen,
+            setEditProfileOpen,
+            inviteModalOpen,
+            setInviteModalOpen,
+            moderationDialogOpen,
+            setModerationDialogOpen,
+        },
         toast,
-        setToast,
-        busy,
-        joining,
-        sendWSMessage,
-        pinnedOpen,
-        setPinnedOpen,
-        searchOpen,
-        setSearchOpen,
-        pinnedRefreshKey,
-        editProfileOpen,
-        setEditProfileOpen,
-        inviteModalOpen,
-        setInviteModalOpen,
-        moderationDialogOpen,
-        setModerationDialogOpen,
-        openMemberMenu,
-        setOpenMemberMenu,
-        setRoom,
-        setMembers,
-        nicknameDialogTarget,
-        setNicknameDialogTarget,
-        nicknameDialogValue,
-        setNicknameDialogValue,
-        nicknameDialogError,
-        nicknameDialogSaving,
-        timeoutDialogTarget,
-        setTimeoutDialogTarget,
-        timeoutDialogAmount,
-        setTimeoutDialogAmount,
-        timeoutDialogUnit,
-        setTimeoutDialogUnit,
-        timeoutDialogError,
-        timeoutDialogSaving,
-        formatTimeoutUntil,
-        openNicknameDialog,
-        openTimeoutDialog,
-        handleSentMessage,
-        handleJoin,
-        handleModSetNickname,
-        handleModUnlockNickname,
-        handleSetTimeout,
-        handleClearTimeout,
-        handleKick,
-        handleBan,
-        handleToggleMute,
-        handleLeave,
-        handleDelete,
-        handleReactionToggle,
-        handlePinToggle,
-        handleJumpToMessage,
-        handleDeleteMessage,
-        handleEditMessage,
-        handleEditLast,
     };
 }
 

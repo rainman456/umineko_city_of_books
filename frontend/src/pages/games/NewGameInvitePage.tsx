@@ -2,8 +2,8 @@ import { useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { useAuthedUser } from "../../hooks/useAuthedUser";
 import { usePageTitle } from "../../hooks/usePageTitle";
-import { useMutualFollowers, useSearchUsers } from "../../api/queries/misc";
-import { useInviteToGame } from "../../api/mutations/gameRoom";
+import { useMutualFollowers, useSearchUsers } from "../../hooks/queries/user";
+import { useInviteToGame } from "../../hooks/mutations/gameRoom";
 import type { GameType, User } from "../../types/api";
 import { Button } from "../../components/Button/Button";
 import { Input } from "../../components/Input/Input";
@@ -77,7 +77,7 @@ export function NewGameInvitePage({ gameName, gameType, blurb = DEFAULT_BLURB }:
                             className={`${styles.userRow} ${selected?.id === u.id ? styles.userRowSelected : ""}`}
                             onClick={() => setSelected(u)}
                         >
-                            <span>{u.display_name}</span>
+                            <span dir="auto">{u.display_name}</span>
                             <span className={styles.subline}>@{u.username}</span>
                         </div>
                     ))}
@@ -88,11 +88,15 @@ export function NewGameInvitePage({ gameName, gameType, blurb = DEFAULT_BLURB }:
                         Cancel
                     </Button>
                     <Button variant="primary" onClick={handleInvite} disabled={!selected || inviteMutation.isPending}>
-                        {inviteMutation.isPending
-                            ? "Sending..."
-                            : selected
-                              ? `Invite ${selected.display_name}`
-                              : "Pick a player"}
+                        {inviteMutation.isPending ? (
+                            "Sending..."
+                        ) : selected ? (
+                            <>
+                                Invite <bdi>{selected.display_name}</bdi>
+                            </>
+                        ) : (
+                            "Pick a player"
+                        )}
                     </Button>
                 </div>
             </div>

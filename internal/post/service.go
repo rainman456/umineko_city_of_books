@@ -14,13 +14,15 @@ import (
 	"umineko_city_of_books/internal/config"
 	"umineko_city_of_books/internal/contentfilter"
 	"umineko_city_of_books/internal/dto"
+	"umineko_city_of_books/internal/homefeed"
 	"umineko_city_of_books/internal/logger"
 	"umineko_city_of_books/internal/media"
+	"umineko_city_of_books/internal/mention"
 	"umineko_city_of_books/internal/notification"
+	"umineko_city_of_books/internal/og"
 	"umineko_city_of_books/internal/repository"
 	"umineko_city_of_books/internal/role"
 	"umineko_city_of_books/internal/settings"
-	"umineko_city_of_books/internal/social"
 	"umineko_city_of_books/internal/upload"
 	"umineko_city_of_books/internal/utils"
 	"umineko_city_of_books/internal/ws"
@@ -62,6 +64,7 @@ type (
 		authz         authz.Service
 		blockSvc      block.Service
 		notifService  notification.Service
+		mentionSvc    mention.Service
 		uploadSvc     upload.Service
 		mediaProc     *media.Processor
 		uploader      *media.Uploader
@@ -69,6 +72,8 @@ type (
 		hub           *ws.Hub
 		contentFilter *contentfilter.Manager
 		botObserver   CommentObserver
+		ogCache       *og.Resolver
+		echoCache     homefeed.Service
 	}
 )
 
@@ -85,11 +90,14 @@ func NewService(
 	authzService authz.Service,
 	blockSvc block.Service,
 	notifService notification.Service,
+	mentionSvc mention.Service,
 	uploadSvc upload.Service,
 	mediaProc *media.Processor,
 	settingsSvc settings.Service,
 	hub *ws.Hub,
 	contentFilter *contentfilter.Manager,
+	ogCache *og.Resolver,
+	echoCache homefeed.Service,
 ) Service {
 	return &service{
 		postRepo:      postRepo,
@@ -99,12 +107,15 @@ func NewService(
 		authz:         authzService,
 		blockSvc:      blockSvc,
 		notifService:  notifService,
+		mentionSvc:    mentionSvc,
 		uploadSvc:     uploadSvc,
 		mediaProc:     mediaProc,
 		uploader:      media.NewUploader(uploadSvc, settingsSvc, mediaProc),
 		settingsSvc:   settingsSvc,
 		hub:           hub,
 		contentFilter: contentFilter,
+		ogCache:       ogCache,
+		echoCache:     echoCache,
 	}
 }
 
@@ -194,7 +205,7 @@ func (s *service) CreatePost(ctx context.Context, userID uuid.UUID, req dto.Crea
 	if corner == "suggestions" {
 		go s.notifySuggestionPosted(userID, id)
 	} else {
-		go social.ProcessMentions(s.userRepo, s.blockSvc, s.notifService, s.settingsSvc, userID, body, id, "post", fmt.Sprintf("/game-board/%s", id))
+		s.mentionSvc.NotifyAsync(ctx, mention.Reference{Kind: mention.KindPost, EntityID: id}, userID, body)
 		go s.observeForBot(id, nil, userID, body, nil)
 	}
 
@@ -349,7 +360,25 @@ func (s *service) DeletePost(ctx context.Context, id uuid.UUID, userID uuid.UUID
 		go s.postRepo.DecrementShareCount(context.Background(), shared.ID, shared.Type)
 	}
 
+	s.clearPageCache(ctx, id.String())
+
 	return nil
+}
+
+func (s *service) clearPageCache(ctx context.Context, id string) {
+	if s.ogCache != nil {
+		if err := s.ogCache.ClearMetaCache(ctx, og.KindPost, id); err != nil {
+			logger.Ctx(ctx).Warn().Err(err).Str("post_id", id).Msg("clear og meta cache failed")
+		}
+	}
+
+	if s.echoCache == nil {
+		return
+	}
+
+	if err := s.echoCache.ClearEchoCache(ctx); err != nil {
+		logger.Ctx(ctx).Warn().Err(err).Msg("clear echo cache failed")
+	}
 }
 
 func (s *service) ListFeed(ctx context.Context, tab string, viewerID uuid.UUID, corner string, search string, sort string, seed int, page bounds.Page, resolvedFilter string) (*dto.PostListResponse, error) {
@@ -579,16 +608,19 @@ func (s *service) CreateComment(ctx context.Context, postID uuid.UUID, userID uu
 
 	body := strings.TrimSpace(req.Body)
 
-	created, err := s.postRepo.CreateComment(ctx, postID, req.ParentID, userID, body)
+	id, err := s.mentionSvc.CreateComment(ctx, mention.CommentSpec{
+		Kind:     mention.KindPostComment,
+		EntityID: postID,
+		ParentID: req.ParentID,
+		AuthorID: userID,
+		Body:     body,
+	})
 	if err != nil {
 		return uuid.Nil, err
 	}
 
-	id := created.ID
-
 	s.broadcastCommentAdded(postID, id)
 
-	go social.ProcessMentions(s.userRepo, s.blockSvc, s.notifService, s.settingsSvc, userID, body, postID, fmt.Sprintf("post_comment:%s", id), fmt.Sprintf("/game-board/%s#comment-%s", postID, id))
 	go s.observeForBot(postID, new(id), userID, body, req.ParentID)
 
 	go func() {

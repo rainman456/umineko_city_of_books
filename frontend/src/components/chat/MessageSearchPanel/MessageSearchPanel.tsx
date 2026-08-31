@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import DOMPurify from "dompurify";
 import type { SearchResult } from "../../../types/api";
-import { useRoomMessageSearch } from "../../../api/queries/search";
+import { useRoomMessageSearch } from "../../../hooks/queries/search";
 import { Pagination } from "../../Pagination/Pagination";
 import { RelativeTimestamp } from "../../RelativeTimestamp/RelativeTimestamp";
 import styles from "./MessageSearchPanel.module.css";
@@ -58,6 +58,7 @@ export function MessageSearchPanel({ roomId, isOpen, onClose, onJump }: MessageS
                 </header>
                 <div className={styles.searchBar}>
                     <input
+                        dir="auto"
                         className={styles.searchInput}
                         type="text"
                         placeholder="Search this conversation..."
@@ -101,6 +102,7 @@ export function MessageSearchPanel({ roomId, isOpen, onClose, onJump }: MessageS
                                 </div>
                                 {r.snippet && (
                                     <div
+                                        dir="auto"
                                         className={styles.resultSnippet}
                                         dangerouslySetInnerHTML={{ __html: sanitiseSnippet(r.snippet) }}
                                     />

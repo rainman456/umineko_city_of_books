@@ -4,7 +4,7 @@ import { RoomAudioRenderer, RoomContext, StartAudio } from "@livekit/components-
 import type { Room } from "livekit-client";
 import { VolumeSlider } from "../../components/VolumeSlider/VolumeSlider";
 import { useChatViewport } from "../../hooks/useChatViewport";
-import { type LiveStream, type StreamDefaultMode } from "../../api/endpoints";
+import type { LiveStream, StreamDefaultMode } from "../../types/api";
 import { StreamChatPanel } from "./StreamChatPanel";
 import { HLSVideoPlayer } from "../../components/live/HLSVideoPlayer";
 import { StreamStage, StreamUptime, StreamViewers, ViewerCountReporter } from "./streamParts";
@@ -24,6 +24,7 @@ interface MobileLiveViewProps {
     isOwnStream: boolean;
     showOwnPreview: boolean;
     onToggleOwnPreview: (show: boolean) => void;
+    thumbnailError?: string;
 }
 
 const noop = () => {};
@@ -43,6 +44,7 @@ export function MobileLiveView({
     isOwnStream,
     showOwnPreview,
     onToggleOwnPreview,
+    thumbnailError,
 }: MobileLiveViewProps) {
     const [tab, setTab] = useState<"chat" | "viewers">("chat");
     const [keyboardOpen, setKeyboardOpen] = useState(false);
@@ -179,15 +181,20 @@ export function MobileLiveView({
                     {"←"}
                 </Link>
                 <div className={styles.mobileMetaText}>
-                    <span className={styles.mobileTitle} title={stream.title}>
+                    <span dir="auto" className={styles.mobileTitle} title={stream.title}>
                         {stream.title}
                     </span>
                     <Link to={`/user/${stream.streamerUsername}`} className={styles.mobileStreamer}>
                         {stream.streamerAvatarUrl && (
                             <img src={stream.streamerAvatarUrl} alt="" className={styles.mobileStreamerAvatar} />
                         )}
-                        <span>{name}</span>
+                        <span dir="auto">{name}</span>
                     </Link>
+                    {thumbnailError && (
+                        <span role="status" className={styles.thumbnailWarning}>
+                            {thumbnailError}
+                        </span>
+                    )}
                 </div>
                 {isLive && (
                     <span className={styles.mobileViewerCount} title="Watching now">

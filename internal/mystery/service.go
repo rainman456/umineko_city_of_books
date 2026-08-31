@@ -15,7 +15,9 @@ import (
 	"umineko_city_of_books/internal/dto"
 	"umineko_city_of_books/internal/logger"
 	"umineko_city_of_books/internal/media"
+	"umineko_city_of_books/internal/mention"
 	"umineko_city_of_books/internal/notification"
+	"umineko_city_of_books/internal/og"
 	"umineko_city_of_books/internal/repository"
 	"umineko_city_of_books/internal/repository/model"
 	"umineko_city_of_books/internal/role"
@@ -69,11 +71,13 @@ type (
 		authz         authz.Service
 		blockSvc      block.Service
 		notifService  notification.Service
+		mentionSvc    mention.Service
 		settingsSvc   settings.Service
 		uploadSvc     upload.Service
 		uploader      *media.Uploader
 		hub           *ws.Hub
 		contentFilter *contentfilter.Manager
+		ogCache       *og.Resolver
 	}
 )
 
@@ -93,11 +97,13 @@ func NewService(
 	authzService authz.Service,
 	blockSvc block.Service,
 	notifService notification.Service,
+	mentionSvc mention.Service,
 	settingsSvc settings.Service,
 	uploadSvc upload.Service,
 	mediaProc *media.Processor,
 	hub *ws.Hub,
 	contentFilter *contentfilter.Manager,
+	ogCache *og.Resolver,
 ) Service {
 	return &service{
 		mysteryRepo:   mysteryRepo,
@@ -107,11 +113,13 @@ func NewService(
 		authz:         authzService,
 		blockSvc:      blockSvc,
 		notifService:  notifService,
+		mentionSvc:    mentionSvc,
 		settingsSvc:   settingsSvc,
 		uploadSvc:     uploadSvc,
 		uploader:      media.NewUploader(uploadSvc, settingsSvc, mediaProc),
 		hub:           hub,
 		contentFilter: contentFilter,
+		ogCache:       ogCache,
 	}
 }
 
@@ -370,6 +378,8 @@ func (s *service) CreateMystery(ctx context.Context, userID uuid.UUID, req dto.C
 		return uuid.Nil, err
 	}
 
+	s.mentionSvc.NotifyAsync(ctx, mention.Reference{Kind: mention.KindMystery, EntityID: created.ID}, userID, req.Body)
+
 	go notification.SendFollowerNotification(context.Background(), s.followRepo, s.notifService, notification.FollowerNotifyParams{
 		ActorID:       userID,
 		Type:          dto.NotifMysteryCreated,
@@ -499,6 +509,10 @@ func (s *service) DeleteMystery(ctx context.Context, id uuid.UUID, userID uuid.U
 
 	s.uploadSvc.Delete(paths...)
 
+	if err := s.ogCache.ClearMetaCache(ctx, og.KindMystery, id.String()); err != nil {
+		logger.Ctx(ctx).Warn().Err(err).Str("mystery_id", id.String()).Msg("clear og meta cache failed")
+	}
+
 	return nil
 }
 
@@ -543,10 +557,18 @@ func (s *service) CreateAttempt(ctx context.Context, mysteryID uuid.UUID, userID
 		}
 	}
 
-	created, err := s.mysteryRepo.CreateAttempt(ctx, mysteryID, userID, req.ParentID, strings.TrimSpace(req.Body))
+	body := strings.TrimSpace(req.Body)
+
+	created, err := s.mysteryRepo.CreateAttempt(ctx, mysteryID, userID, req.ParentID, body)
 	if err != nil {
 		return uuid.Nil, err
 	}
+
+	s.mentionSvc.NotifyAsync(ctx, mention.Reference{
+		Kind:     mention.KindMysteryAttempt,
+		EntityID: mysteryID,
+		ChildID:  created.ID,
+	}, userID, body)
 
 	wsData := map[string]any{
 		"mystery_id":          mysteryID,
@@ -1030,12 +1052,16 @@ func (s *service) CreateComment(ctx context.Context, mysteryID uuid.UUID, userID
 		return uuid.Nil, block.ErrUserBlocked
 	}
 
-	created, err := s.mysteryRepo.CreateComment(ctx, mysteryID, req.ParentID, userID, body)
+	id, err := s.mentionSvc.CreateComment(ctx, mention.CommentSpec{
+		Kind:     mention.KindMysteryComment,
+		EntityID: mysteryID,
+		ParentID: req.ParentID,
+		AuthorID: userID,
+		Body:     body,
+	})
 	if err != nil {
 		return uuid.Nil, err
 	}
-
-	id := created.ID
 
 	go func() {
 		bgCtx := context.Background()

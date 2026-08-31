@@ -1,22 +1,65 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Room } from "livekit-client";
+import { roomCapabilities } from "../../../domain/chat/roomPolicy";
 import type { DmController } from "../../../hooks/useDmController";
-import { makeUser } from "../../../test-utils/fixtures";
+import { makeDmController } from "../../../hooks/useDmController.fixture";
+import { makeDmRoom, makePublicUser, makeUser } from "../../../test-utils/fixtures";
 import { renderWithProviders } from "../../../test-utils/render";
 import type { ChatRoom, User } from "../../../types/api";
-import { MobileDmView } from "./MobileDmView";
+import { MobileDmView, type DmThreadView } from "./MobileDmView";
 
-const mocks = vi.hoisted(() => ({ forceMuteVoiceParticipant: vi.fn(() => Promise.resolve()) }));
+const mocks = vi.hoisted(() => ({
+    forceMuteVoiceParticipant: vi.fn<
+        (roomId: string | null | undefined, userId: string, muted: boolean) => Promise<void>
+    >(() => Promise.resolve()),
+}));
 
-vi.mock("../../../api/endpoints", async importOriginal => {
-    const actual = await importOriginal<typeof import("../../../api/endpoints")>();
+vi.mock("../../../hooks/mutations/chat", async importOriginal => {
+    const actual = await importOriginal<typeof import("../../../hooks/mutations/chat")>();
 
-    return { ...actual, forceMuteVoiceParticipant: mocks.forceMuteVoiceParticipant };
+    return {
+        ...actual,
+        useForceMuteVoiceParticipant: (roomId: string | null | undefined) => ({
+            mutate: (
+                variables: { userId: string; muted: boolean },
+                callbacks?: { onError?: (err: unknown) => void },
+            ) => {
+                mocks
+                    .forceMuteVoiceParticipant(roomId, variables.userId, variables.muted)
+                    .catch((err: unknown) => callbacks?.onError?.(err));
+            },
+        }),
+    };
 });
 
-vi.mock("../MessageList/DmMessageList", () => ({
-    DmMessageList: () => <div data-testid="dm-messages">messages</div>,
+vi.mock("../MessageList/MessageList", () => ({
+    MessageList: ({
+        highlightedMessageId,
+        viewerTimedOut,
+    }: {
+        highlightedMessageId?: string | null;
+        viewerTimedOut?: boolean;
+    }) => (
+        <div
+            data-testid="dm-messages"
+            data-highlighted={highlightedMessageId ?? ""}
+            data-timed-out={String(Boolean(viewerTimedOut))}
+        >
+            messages
+        </div>
+    ),
+}));
+
+vi.mock("../MessageSearchPanel/MessageSearchPanel", () => ({
+    MessageSearchPanel: ({ roomId, onClose }: { roomId: string; onClose: () => void }) => (
+        <div data-testid="search-panel" data-room={roomId}>
+            <button type="button" onClick={onClose}>
+                close search
+            </button>
+        </div>
+    ),
 }));
 
 vi.mock("../Voice/VoiceBar", () => ({
@@ -47,12 +90,16 @@ vi.mock("../ChatComposer/ChatComposer", () => ({
         extraActions,
         onTyping,
         onEditLast,
+        mentionPool,
+        timeoutUntil,
     }: {
         roomId: string | null;
         draftRecipientId: string | null;
         extraActions?: React.ReactNode;
         onTyping?: () => void;
         onEditLast?: () => void;
+        mentionPool?: User[];
+        timeoutUntil?: string;
     }) => (
         <div
             data-testid="composer"
@@ -60,6 +107,8 @@ vi.mock("../ChatComposer/ChatComposer", () => ({
             data-draft-recipient={draftRecipientId ?? ""}
             data-has-typing={String(Boolean(onTyping))}
             data-has-edit-last={String(Boolean(onEditLast))}
+            data-mention-pool={mentionPool === undefined ? "none" : mentionPool.map(u => u.username).join(",")}
+            data-timeout-until={timeoutUntil ?? ""}
         >
             {extraActions}
         </div>
@@ -73,90 +122,54 @@ function makeOther(overrides: Partial<User> = {}): User {
 }
 
 function makeRoom(overrides: Partial<ChatRoom> = {}): ChatRoom {
-    return {
-        id: "room-1",
-        name: "",
-        description: "",
-        type: "dm",
-        is_public: false,
-        is_rp: false,
-        is_system: false,
-        tags: [],
-        viewer_muted: false,
-        viewer_ghost: false,
-        is_member: true,
-        member_count: 2,
-        hot_score: 0,
-        members: [{ id: "u1", username: "beatrice", display_name: "Beatrice" }, makeOther()],
+    return makeDmRoom({
+        members: [makePublicUser(), makeOther()],
         created_at: "2026-07-01T00:00:00Z",
         ...overrides,
-    };
+    });
 }
 
-function makeVoice(overrides: Record<string, unknown> = {}): DmController["voice"] {
-    return {
-        status: "idle",
-        room: null,
-        participantIds: [],
-        presenceCount: 0,
-        join: vi.fn(),
-        leave: vi.fn(),
-        ...overrides,
-    } as unknown as DmController["voice"];
+const controllerDefaults = makeDmController();
+
+function makeVoice(overrides: Partial<DmController["voice"]> = {}): DmController["voice"] {
+    return { ...controllerDefaults.voice, ...overrides };
 }
 
 function makeController(overrides: Partial<DmController> = {}): DmController {
-    const base = {
-        user: viewer,
-        mobileView: "list",
-        rooms: [],
-        activeRoom: undefined,
-        activeRoomId: null,
-        draftRecipient: null,
-        setDraftRecipient: vi.fn(),
-        messagesEndRef: { current: null },
-        scrollToBottom: vi.fn(),
-        typingNames: [],
-        voice: makeVoice(),
-        voiceEnabled: true,
-        replyingTo: null,
-        setReplyingTo: vi.fn(),
-        lightboxSrc: null,
-        setLightboxSrc: vi.fn(),
-        showNewDm: false,
-        setShowNewDm: vi.fn(),
-        dmSearch: "",
-        setDmSearch: vi.fn(),
-        dmResults: [],
-        dmMutuals: [],
-        dmError: "",
-        dmCreating: false,
-        handleRoomSelect: vi.fn(),
-        handleMobileBack: vi.fn(),
-        handleSentMessage: vi.fn(),
-        handleSelectUser: vi.fn(),
-        handleEditLast: vi.fn(),
-        handleDeleteChat: vi.fn(),
-        notifyTyping: vi.fn(),
-    };
+    const user = overrides.user === undefined ? viewer : overrides.user;
 
-    return { ...base, ...overrides } as unknown as DmController;
+    return makeDmController({ user, capabilities: roomCapabilities(overrides.activeRoom ?? null, user), ...overrides });
 }
 
-function renderView(overrides: Partial<DmController> = {}) {
-    const controller = makeController(overrides);
-    const result = renderWithProviders(<MobileDmView controller={controller} />);
-
-    return { ...result, controller };
-}
-
-function roomView(overrides: Partial<DmController> = {}) {
-    return renderView({
-        mobileView: "room",
-        activeRoom: makeRoom(),
-        activeRoomId: "room-1",
+function makeThread(overrides: Partial<DmThreadView> = {}): DmThreadView {
+    return {
+        anchor: { highlightedMsgId: null, handleJumpToMessage: vi.fn(() => Promise.resolve()) },
+        mentionPool: [],
+        viewerTimedOut: false,
+        searchOpen: false,
+        setSearchOpen: vi.fn(),
         ...overrides,
-    });
+    };
+}
+
+function renderView(overrides: Partial<DmController> = {}, threadOverrides: Partial<DmThreadView> = {}) {
+    const controller = makeController(overrides);
+    const thread = makeThread(threadOverrides);
+    const result = renderWithProviders(<MobileDmView controller={controller} thread={thread} />);
+
+    return { ...result, controller, thread };
+}
+
+function roomView(overrides: Partial<DmController> = {}, threadOverrides: Partial<DmThreadView> = {}) {
+    return renderView(
+        {
+            mobileView: "room",
+            activeRoom: makeRoom(),
+            activeRoomId: "room-1",
+            ...overrides,
+        },
+        threadOverrides,
+    );
 }
 
 beforeEach(() => {
@@ -362,6 +375,53 @@ describe("MobileDmView", () => {
         expect(handleDeleteChat).toHaveBeenCalledTimes(1);
     });
 
+    it("mutes an open conversation from the top bar", async () => {
+        // given
+        const handleToggleMute = vi.fn();
+        const user = userEvent.setup();
+        roomView({ handleToggleMute });
+
+        // when
+        await user.click(screen.getByLabelText("Mute notifications"));
+
+        // then
+        expect(handleToggleMute).toHaveBeenCalledTimes(1);
+    });
+
+    it("offers to unmute a conversation the viewer already silenced", () => {
+        // given
+        const activeRoom = makeRoom({ viewer_muted: true });
+
+        // when
+        roomView({ activeRoom });
+
+        // then
+        expect(screen.getByLabelText("Unmute notifications")).toBeInTheDocument();
+        expect(screen.queryByLabelText("Mute notifications")).not.toBeInTheDocument();
+    });
+
+    it("blocks a second mute while the first is still in flight", () => {
+        // given
+        const mutePending = true;
+
+        // when
+        roomView({ mutePending });
+
+        // then
+        expect(screen.getByLabelText("Mute notifications")).toBeDisabled();
+    });
+
+    it("keeps the mute control away from a conversation that does not exist yet", () => {
+        // given
+        const draftRecipient = makeOther();
+
+        // when
+        renderView({ mobileView: "room", draftRecipient });
+
+        // then
+        expect(screen.queryByLabelText("Mute notifications")).not.toBeInTheDocument();
+    });
+
     it("offers to abandon a draft instead of deleting it", async () => {
         // given
         const setDraftRecipient = vi.fn();
@@ -388,7 +448,7 @@ describe("MobileDmView", () => {
         renderView({ mobileView: "room", draftRecipient });
 
         // then
-        expect(screen.getByText(/Send your first message to Battler\./)).toBeInTheDocument();
+        expect(screen.getByText(/Send your first message to/)).toHaveTextContent("Send your first message to Battler.");
         expect(screen.queryByTestId("dm-messages")).not.toBeInTheDocument();
     });
 
@@ -417,7 +477,7 @@ describe("MobileDmView", () => {
 
     it("shows the voice bar once the viewer is connected to the call", () => {
         // given
-        const voice = makeVoice({ status: "connected", room: { name: "voice" } });
+        const voice = makeVoice({ status: "connected", room: new Room() });
 
         // when
         roomView({ voice });
@@ -428,7 +488,7 @@ describe("MobileDmView", () => {
 
     it("treats an ordinary member as unable to moderate the call", () => {
         // given
-        const voice = makeVoice({ status: "connected", room: { name: "voice" } });
+        const voice = makeVoice({ status: "connected", room: new Room() });
 
         // when
         roomView({ voice });
@@ -442,7 +502,7 @@ describe("MobileDmView", () => {
         const user = makeUser({ id: "u1", username: "beatrice", role: "admin" });
 
         // when
-        roomView({ user, voice: makeVoice({ status: "connected", room: { name: "voice" } }) });
+        roomView({ user, voice: makeVoice({ status: "connected", room: new Room() }) });
 
         // then
         expect(screen.getByTestId("voice-bar")).toHaveAttribute("data-can-moderate", "true");
@@ -451,13 +511,29 @@ describe("MobileDmView", () => {
     it("sends a server mute to the room the conversation belongs to", async () => {
         // given
         const user = userEvent.setup();
-        roomView({ voice: makeVoice({ status: "connected", room: { name: "voice" } }) });
+        roomView({ voice: makeVoice({ status: "connected", room: new Room() }) });
 
         // when
         await user.click(screen.getByRole("button", { name: "server mute battler" }));
 
         // then
         expect(mocks.forceMuteVoiceParticipant).toHaveBeenCalledWith("room-1", "battler", true);
+    });
+
+    it("tells the moderator when a server mute did not take", async () => {
+        // given
+        mocks.forceMuteVoiceParticipant.mockRejectedValue(new Error("LiveKit said no"));
+        const showToast = vi.fn();
+        const user = userEvent.setup();
+        roomView({ showToast, voice: makeVoice({ status: "connected", room: new Room() }) });
+
+        // when
+        await user.click(screen.getByRole("button", { name: "server mute battler" }));
+
+        // then
+        await waitFor(() => {
+            expect(showToast).toHaveBeenCalledWith("LiveKit said no");
+        });
     });
 
     it("only shows who is typing inside a real conversation", () => {
@@ -468,7 +544,7 @@ describe("MobileDmView", () => {
         roomView({ typingNames });
 
         // then
-        expect(screen.getByText("Battler is typing...")).toBeInTheDocument();
+        expect(screen.getByText(/is typing/)).toHaveTextContent("Battler is typing...");
     });
 
     it("hides the typing indicator while the conversation is still a draft", () => {
@@ -479,7 +555,7 @@ describe("MobileDmView", () => {
         renderView({ mobileView: "room", draftRecipient: makeOther(), typingNames });
 
         // then
-        expect(screen.queryByText("Battler is typing...")).not.toBeInTheDocument();
+        expect(screen.queryByText(/is typing/)).not.toBeInTheDocument();
     });
 
     it("points the composer at the open conversation", () => {
@@ -541,5 +617,102 @@ describe("MobileDmView", () => {
 
         // then
         expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+
+    it("opens the message search from the top bar", async () => {
+        // given
+        const user = userEvent.setup();
+        const { thread } = roomView();
+
+        // when
+        await user.click(screen.getByLabelText("Search messages"));
+
+        // then
+        expect(thread.setSearchOpen).toHaveBeenCalledWith(true);
+    });
+
+    it("keeps the search panel out of the way until it is opened", () => {
+        // given
+        const searchOpen = false;
+
+        // when
+        roomView({}, { searchOpen });
+
+        // then
+        expect(screen.queryByTestId("search-panel")).not.toBeInTheDocument();
+    });
+
+    it("searches the conversation that is open", () => {
+        // given
+        const searchOpen = true;
+
+        // when
+        roomView({}, { searchOpen });
+
+        // then
+        expect(screen.getByTestId("search-panel")).toHaveAttribute("data-room", "room-1");
+    });
+
+    it("offers no search from a conversation that does not exist yet", () => {
+        // given
+        const draftRecipient = makeOther();
+
+        // when
+        renderView({ mobileView: "room", draftRecipient });
+
+        // then
+        expect(screen.queryByLabelText("Search messages")).not.toBeInTheDocument();
+    });
+
+    it("gives the composer the conversation's members and the viewer's timeout", () => {
+        // given
+        const mentionPool = [makeOther({ id: "u3", username: "ronove" })];
+        const viewerTimeoutUntil = "2026-08-02T12:00:00Z";
+
+        // when
+        roomView({}, { mentionPool, viewerTimeoutUntil });
+
+        // then
+        const composer = screen.getByTestId("composer");
+        expect(composer).toHaveAttribute("data-mention-pool", "ronove");
+        expect(composer).toHaveAttribute("data-timeout-until", "2026-08-02T12:00:00Z");
+    });
+
+    it("leaves a draft conversation on the site-wide mention search", () => {
+        // given
+        const draftRecipient = makeOther();
+
+        // when
+        renderView(
+            { mobileView: "room", draftRecipient },
+            { mentionPool: [makeOther({ id: "u3", username: "ronove" })], viewerTimeoutUntil: "2026-08-02T12:00:00Z" },
+        );
+
+        // then
+        const composer = screen.getByTestId("composer");
+        expect(composer).toHaveAttribute("data-mention-pool", "none");
+        expect(composer).toHaveAttribute("data-timeout-until", "");
+    });
+
+    it("highlights the message the viewer was sent to", () => {
+        // given
+        const anchor = { highlightedMsgId: "m5", handleJumpToMessage: vi.fn(() => Promise.resolve()) };
+
+        // when
+        roomView({}, { anchor });
+
+        // then
+        expect(screen.getByTestId("dm-messages")).toHaveAttribute("data-highlighted", "m5");
+    });
+
+    it("locks the messages while the viewer is timed out", () => {
+        // given
+        const viewerTimedOut = true;
+
+        // when
+        roomView({}, { viewerTimedOut });
+
+        // then
+        expect(screen.getByTestId("dm-messages")).toHaveAttribute("data-timed-out", "true");
     });
 });

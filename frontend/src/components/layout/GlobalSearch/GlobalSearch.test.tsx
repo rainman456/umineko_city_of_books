@@ -13,7 +13,7 @@ vi.mock("react-router", async () => {
     return { ...actual, useNavigate: () => navigate };
 });
 
-vi.mock("../../../api/queries/search", () => ({ useQuickSearch }));
+vi.mock("../../../hooks/queries/search", () => ({ useQuickSearch }));
 
 function makeResult(overrides: Partial<SearchResult> = {}): SearchResult {
     return {
@@ -157,7 +157,7 @@ describe("GlobalSearch dropdown states", () => {
         flushDebounce();
 
         // then
-        expect(screen.getByText('No results for "beat".')).toBeInTheDocument();
+        expect(screen.getByText(/No results for/)).toHaveTextContent('No results for "beat".');
     });
 
     it("keeps the previous results on screen while a refetch is in flight", async () => {
