@@ -20,6 +20,37 @@ function makeRoom(overrides: Partial<GameRoom> = {}): GameRoom {
     );
 }
 
+describe("GamePlayerBar sides", () => {
+    it("puts the first slot on the left when the board draws it there", () => {
+        // given
+        const room = makeRoom();
+
+        // when
+        renderWithProviders(
+            <GamePlayerBar room={room} slot0Label="P1" slot1Label="P2" liveDurationSeconds={0} slot0Side="left" />,
+        );
+
+        // then
+        const left = screen.getByText("Battler");
+        const right = screen.getByText("Beatrice");
+        expect(left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("carries each player's own label to whichever side they are on", () => {
+        // given
+        const room = makeRoom();
+
+        // when
+        renderWithProviders(
+            <GamePlayerBar room={room} slot0Label="P1" slot1Label="P2" liveDurationSeconds={0} slot0Side="left" />,
+        );
+
+        // then
+        const battler = screen.getByText("Battler");
+        expect(battler.nextElementSibling?.textContent).toBe("(P1)");
+    });
+});
+
 describe("GamePlayerBar", () => {
     it("puts the second slot on the left and the first slot on the right", () => {
         // given

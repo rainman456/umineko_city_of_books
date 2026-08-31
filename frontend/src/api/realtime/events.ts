@@ -115,7 +115,9 @@ export const REALTIME_EVENTS = {
 
 type EmptyEventPayload = Record<string, never>;
 
-export type PongPayload = EmptyEventPayload;
+export interface PongPayload {
+    nonce?: number;
+}
 
 export type NotificationPayload = Notification;
 

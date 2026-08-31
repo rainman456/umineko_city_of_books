@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { playPongEvents } from "../../../games/pong/audio";
 import { usePongFrames } from "../../../games/pong/hooks/usePongFrames";
 import { usePongInput } from "../../../games/pong/hooks/usePongInput";
-import { sampleAt, serverNow } from "../../../games/pong/interpolate";
+import { latencyGrade, type LatencyGrade } from "../../../domain/games/latency";
+import { sampleAt, serverNow, smoothTowards, type PongCourtBounds } from "../../../games/pong/interpolate";
 import {
     PONG_EVENT_HIT_P0,
     PONG_EVENT_HIT_P1,
     PONG_EVENT_SCORE,
-    PONG_RENDER_DELAY_MS,
+    PONG_HALF_TRIP_MAX_MS,
+    PONG_PADDLE_SMOOTH_MS,
 } from "../../../games/pong/types";
 import type { GameRoom, PongState } from "../../../types/api";
 import styles from "./PongCourt.module.css";
@@ -17,6 +19,7 @@ interface PongCourtProps {
     state: PongState;
     mySlot: number | null;
     isSpectator: boolean;
+    roundTripMs: number | null;
 }
 
 interface CourtColours {
@@ -39,6 +42,11 @@ const SHAKE_PX = 2;
 const SCRIM = "rgba(0, 0, 0, 0.55)";
 const SLOTS = [0, 1];
 const COURT_FONT = '"Courier New", ui-monospace, monospace';
+const PING_COLOURS: Record<LatencyGrade, string> = {
+    good: "#4ade80",
+    fair: "#f5c542",
+    poor: "#ff5c5c",
+};
 
 function clamp(value: number, min: number, max: number): number {
     if (value < min) {
@@ -71,14 +79,16 @@ function readColours(): CourtColours {
     };
 }
 
-export function PongCourt({ room, state, mySlot, isSpectator }: PongCourtProps) {
+export function PongCourt({ room, state, mySlot, isSpectator, roundTripMs }: PongCourtProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const animRef = useRef(0);
     const drawRef = useRef<() => void>(() => {});
     const coloursRef = useRef<CourtColours | null>(null);
     const sizeRef = useRef({ cssWidth: 0, cssHeight: 0, dpr: 1 });
     const trailRef = useRef<{ x: number; y: number; at: number }[]>([]);
-    const localYRef = useRef<number | null>(null);
+    const shownPaddleRef = useRef<[number | null, number | null]>([null, null]);
+    const lastDrawRef = useRef(0);
+    const latencyRef = useRef<number | null>(null);
     const lastFiredTRef = useRef(0);
     const flashRef = useRef<[number, number]>([0, 0]);
     const shakeRef = useRef(0);
@@ -88,8 +98,23 @@ export function PongCourt({ room, state, mySlot, isSpectator }: PongCourtProps) 
     const localSlot = mySlot ?? 0;
     const enabled = active && !isSpectator && mySlot !== null;
 
+    const bounds = useMemo<PongCourtBounds>(
+        () => ({
+            height: state.height,
+            ballRadius: state.ball_radius,
+            paddleHeight: state.paddle_height,
+            faceX0: state.paddle_inset + state.paddle_width,
+            faceX1: state.width - state.paddle_inset - state.paddle_width,
+        }),
+        [state.ball_radius, state.height, state.paddle_height, state.paddle_inset, state.paddle_width, state.width],
+    );
+
+    useEffect(() => {
+        latencyRef.current = roundTripMs;
+    }, [roundTripMs]);
+
     const frames = usePongFrames(room.id);
-    const { targetRef, seedTargetY, setTargetFromPointer } = usePongInput({
+    const { targetRef, seedTargetY, setTargetFromPointer, targetAt } = usePongInput({
         roomId: room.id,
         enabled,
         courtHeight: state.height,
@@ -163,9 +188,13 @@ export function PongCourt({ room, state, mySlot, isSpectator }: PongCourtProps) 
             coloursRef.current = colours;
 
             const now = Date.now();
+            const elapsed = lastDrawRef.current === 0 ? 0 : now - lastDrawRef.current;
+            lastDrawRef.current = now;
+
+            const halfTrip = clamp((latencyRef.current ?? 0) / 2, 0, PONG_HALF_TRIP_MAX_MS);
 
             const buffer = frames.current;
-            const sample = buffer.length > 0 ? sampleAt(buffer, serverNow(buffer, now) - PONG_RENDER_DELAY_MS) : null;
+            const sample = buffer.length > 0 ? sampleAt(buffer, serverNow(buffer, now) + halfTrip, bounds) : null;
 
             const phase = sample ? sample.phase : state.phase;
             const scores = sample ? sample.scores : state.scores;
@@ -197,6 +226,17 @@ export function PongCourt({ room, state, mySlot, isSpectator }: PongCourtProps) 
                 }
             }
 
+            for (const slot of SLOTS) {
+                const shown = shownPaddleRef.current[slot];
+                const eased =
+                    shown === null
+                        ? paddleY[slot]
+                        : smoothTowards(shown, paddleY[slot], elapsed, PONG_PADDLE_SMOOTH_MS);
+
+                shownPaddleRef.current[slot] = eased;
+                paddleY[slot] = eased;
+            }
+
             if (enabled) {
                 const half = state.paddle_height / 2;
 
@@ -204,10 +244,11 @@ export function PongCourt({ room, state, mySlot, isSpectator }: PongCourtProps) 
                     seedTargetY(sample.paddleY[localSlot]);
                 }
 
-                const predicted = clamp(targetRef.current, half, state.height - half);
+                const asServerHasIt = targetAt(performance.now() - halfTrip);
+                const predicted = clamp(asServerHasIt, half, state.height - half);
 
-                localYRef.current = predicted;
                 paddleY[localSlot] = predicted;
+                shownPaddleRef.current[localSlot] = predicted;
             }
 
             if (!reduceMotionRef.current && phase === "rally") {
@@ -299,6 +340,29 @@ export function PongCourt({ room, state, mySlot, isSpectator }: PongCourtProps) 
             ctx.fill();
             ctx.restore();
 
+            if (sample) {
+                ctx.save();
+                ctx.textBaseline = "bottom";
+                ctx.font = `${Math.round(state.height * 0.035)}px ${COURT_FONT}`;
+
+                for (const slot of SLOTS) {
+                    const ping = Math.round(sample.ping[slot]);
+                    if (ping <= 0) {
+                        continue;
+                    }
+
+                    ctx.fillStyle = PING_COLOURS[latencyGrade(ping)];
+                    ctx.textAlign = slot === 0 ? "left" : "right";
+                    ctx.fillText(
+                        `${ping}ms`,
+                        slot === 0 ? state.width * 0.02 : state.width * 0.98,
+                        state.height * 0.98,
+                    );
+                }
+
+                ctx.restore();
+            }
+
             if (phase === "countdown" || phase === "serve") {
                 ctx.save();
                 ctx.textAlign = "center";
@@ -346,7 +410,7 @@ export function PongCourt({ room, state, mySlot, isSpectator }: PongCourtProps) 
             window.cancelAnimationFrame(animRef.current);
             drawRef.current = () => {};
         };
-    }, [active, enabled, frames, isSpectator, localSlot, mySlot, seedTargetY, state, targetRef]);
+    }, [active, bounds, enabled, frames, isSpectator, localSlot, mySlot, seedTargetY, state, targetAt, targetRef]);
 
     const handlePointer = useCallback(
         (event: ReactPointerEvent<HTMLCanvasElement>) => {

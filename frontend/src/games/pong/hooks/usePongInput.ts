@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, type RefObject } from "react";
 import { sendRealtime } from "../../../api/realtime/outbound";
 import { useRealtimeStatus } from "../../../api/realtime/useRealtime";
+import { sampleHistory, type TargetSample } from "../interpolate";
 import {
     PONG_INPUT_EPSILON,
     PONG_INPUT_INTERVAL_MS,
     PONG_INPUT_KEEPALIVE_MS,
     PONG_INPUT_TYPE,
     PONG_PADDLE_MAX_SPEED,
+    PONG_TARGET_HISTORY_MS,
 } from "../types";
 
 export interface UsePongInputOptions {
@@ -22,6 +24,7 @@ export interface PongInputHandle {
     setTargetY: (y: number) => void;
     seedTargetY: (y: number) => void;
     setTargetFromPointer: (clientY: number, rect: { top: number; height: number }) => void;
+    targetAt: (at: number) => number;
 }
 
 const UP_KEYS = new Set(["ArrowUp", "w", "W"]);
@@ -59,7 +62,10 @@ export function usePongInput(options: UsePongInputOptions): PongInputHandle {
     const lastSentAtRef = useRef(0);
     const seqRef = useRef(0);
     const seededRef = useRef(false);
+    const historyRef = useRef<TargetSample[]>([]);
     const keysRef = useRef({ up: false, down: false });
+
+    const targetAt = useCallback((at: number) => sampleHistory(historyRef.current, at, targetRef.current), []);
 
     useEffect(() => {
         limitsRef.current = { courtHeight, paddleHeight };
@@ -166,6 +172,7 @@ export function usePongInput(options: UsePongInputOptions): PongInputHandle {
 
         lastSentTargetRef.current = null;
         lastSentAtRef.current = Number.NEGATIVE_INFINITY;
+        historyRef.current = [];
 
         let handle = 0;
         let previous = 0;
@@ -184,6 +191,17 @@ export function usePongInput(options: UsePongInputOptions): PongInputHandle {
 
             if (!seededRef.current) {
                 return;
+            }
+
+            const history = historyRef.current;
+            history.push({ at: now, y: targetRef.current });
+
+            let stale = 0;
+            while (stale < history.length && now - history[stale].at > PONG_TARGET_HISTORY_MS) {
+                stale += 1;
+            }
+            if (stale > 0) {
+                history.splice(0, stale);
             }
 
             const target = targetRef.current;
@@ -214,5 +232,5 @@ export function usePongInput(options: UsePongInputOptions): PongInputHandle {
         };
     }, [enabled, epoch, roomId, setTargetY]);
 
-    return { targetRef, setTargetY, seedTargetY, setTargetFromPointer };
+    return { targetRef, setTargetY, seedTargetY, setTargetFromPointer, targetAt };
 }

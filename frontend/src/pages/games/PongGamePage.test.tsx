@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { makeGamePlayer, makeGameRoom, makeUser } from "../../test-utils/fixtures";
@@ -6,14 +6,18 @@ import { renderWithProviders } from "../../test-utils/render";
 import type { GameRoom, GameRoomPlayer, UserProfile } from "../../types/api";
 import { PongGamePage } from "./PongGamePage";
 
-const { useGameRoom, useAcceptGameInvite, useDeclineGameInvite, useResignGame, navigate } = vi.hoisted(() => ({
-    useGameRoom: vi.fn(),
-    useAcceptGameInvite: vi.fn(),
-    useDeclineGameInvite: vi.fn(),
-    useResignGame: vi.fn(),
-    navigate: vi.fn(),
-}));
+const { useGameRoom, useAcceptGameInvite, useDeclineGameInvite, useResignGame, useServerPing, navigate } = vi.hoisted(
+    () => ({
+        useGameRoom: vi.fn(),
+        useAcceptGameInvite: vi.fn(),
+        useDeclineGameInvite: vi.fn(),
+        useResignGame: vi.fn(),
+        useServerPing: vi.fn(),
+        navigate: vi.fn(),
+    }),
+);
 
+vi.mock("../../hooks/useServerPing", () => ({ useServerPing }));
 vi.mock("../../hooks/queries/gameRoom", () => ({ useGameRoom }));
 vi.mock("../../hooks/mutations/gameRoom", () => ({
     useAcceptGameInvite,
@@ -83,6 +87,7 @@ interface StubOptions {
     error?: string;
     accept?: () => Promise<unknown>;
     decline?: () => Promise<unknown>;
+    ping?: { roundTripMs: number | null; grade: "good" | "fair" | "poor" | null };
 }
 
 function stubRoom(options: StubOptions = {}) {
@@ -100,6 +105,7 @@ function stubRoom(options: StubOptions = {}) {
     useAcceptGameInvite.mockReturnValue({ mutateAsync: acceptInvite });
     useDeclineGameInvite.mockReturnValue({ mutateAsync: declineInvite });
     useResignGame.mockReturnValue({ mutateAsync: resign });
+    useServerPing.mockReturnValue(options.ping ?? { roundTripMs: null, grade: null });
 
     return { refetch, acceptInvite, declineInvite, resign };
 }
@@ -235,6 +241,57 @@ describe("PongGamePage", () => {
         // then
         expect(acceptInvite).toHaveBeenCalledWith("room-8");
         expect(refetch).toHaveBeenCalledOnce();
+    });
+
+    it("asks before accepting a real-time match on a connection that cannot carry it", async () => {
+        // given
+        const { acceptInvite } = stubRoom({
+            room: makeRoom({ id: "room-8", status: "pending" }),
+            ping: { roundTripMs: 240, grade: "poor" },
+        });
+        const user = userEvent.setup();
+        renderGame(guest);
+
+        // when
+        await user.click(screen.getByRole("button", { name: "Accept" }));
+
+        // then
+        expect(acceptInvite).not.toHaveBeenCalled();
+        expect(await screen.findByText("Your connection is slow")).toBeInTheDocument();
+        expect(within(screen.getByRole("dialog")).getByText(/240ms/)).toBeInTheDocument();
+    });
+
+    it("accepts anyway once the slow connection has been acknowledged", async () => {
+        // given
+        const { acceptInvite } = stubRoom({
+            room: makeRoom({ id: "room-8", status: "pending" }),
+            ping: { roundTripMs: 240, grade: "poor" },
+        });
+        const user = userEvent.setup();
+        renderGame(guest);
+
+        // when
+        await user.click(screen.getByRole("button", { name: "Accept" }));
+        await user.click(await screen.findByRole("button", { name: "Accept anyway" }));
+
+        // then
+        expect(acceptInvite).toHaveBeenCalledWith("room-8");
+    });
+
+    it("lets a merely slow connection through without asking", async () => {
+        // given
+        const { acceptInvite } = stubRoom({
+            room: makeRoom({ id: "room-8", status: "pending" }),
+            ping: { roundTripMs: 100, grade: "fair" },
+        });
+        const user = userEvent.setup();
+        renderGame(guest);
+
+        // when
+        await user.click(screen.getByRole("button", { name: "Accept" }));
+
+        // then
+        expect(acceptInvite).toHaveBeenCalledWith("room-8");
     });
 
     it("shows why an invite could not be accepted", async () => {

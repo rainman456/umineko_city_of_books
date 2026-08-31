@@ -1,6 +1,7 @@
 import { sendRaw } from "./socket";
 
 export const REALTIME_COMMANDS = {
+    PING: "ping",
     JOIN_ROOM: "join_room",
     LEAVE_ROOM: "leave_room",
     TYPING: "typing",
@@ -11,6 +12,11 @@ export const REALTIME_COMMANDS = {
     GAME_ROOM_LEAVE: "game_room_leave",
     GAME_ROOM_INPUT: "game_room_input",
 } as const satisfies Record<string, RealtimeCommandName>;
+
+export interface PingPayload {
+    nonce: number;
+    rtt?: number;
+}
 
 export interface RoomActionPayload {
     room_id: string;
@@ -47,6 +53,7 @@ export interface GameRoomInputPayload<P = unknown> {
 }
 
 export type RealtimeCommand =
+    | { type: "ping"; data: PingPayload }
     | { type: "join_room"; data: JoinRoomPayload }
     | { type: "leave_room"; data: LeaveRoomPayload }
     | { type: "typing"; data: TypingCommandPayload }

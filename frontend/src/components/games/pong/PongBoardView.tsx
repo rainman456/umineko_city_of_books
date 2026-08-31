@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { isPongMuted, setPongMuted } from "../../../games/pong/audio";
+import { useServerPing } from "../../../hooks/useServerPing";
 import type { GameRoom, PongState, PongStats, User } from "../../../types/api";
 import { Button } from "../../Button/Button";
 import { DisconnectBanner } from "../DisconnectBanner";
+import { LatencyBanner } from "../LatencyBanner";
 import { GameOverPanel } from "../GameOverPanel";
 import { GamePlayerBar } from "../GamePlayerBar";
 import { GameStatsGrid } from "../GameStatsGrid";
@@ -57,6 +59,7 @@ export function PongBoardView({ room, viewer, isSpectator, onResign }: PongBoard
 
     const result = gameResultLabel(room, viewerId, isSpectator);
     const isOver = room.status === "finished" || room.status === "abandoned";
+    const ping = useServerPing(!isOver && !isSpectator && mySlot !== null);
     const stats = isPongStats(room.stats) ? room.stats : null;
     const showStats = stats !== null && (isOver || (room.status === "active" && isSpectator));
 
@@ -77,16 +80,30 @@ export function PongBoardView({ room, viewer, isSpectator, onResign }: PongBoard
 
     return (
         <div className={shell.wrapper}>
-            <GamePlayerBar room={room} slot0Label="P1" slot1Label="P2" liveDurationSeconds={liveDurationSeconds} />
+            <GamePlayerBar
+                room={room}
+                slot0Label="P1"
+                slot1Label="P2"
+                liveDurationSeconds={liveDurationSeconds}
+                slot0Side="left"
+            />
 
             <DisconnectBanner offlinePlayer={offlinePlayer} forfeitRemaining={forfeitRemaining} />
+
+            <LatencyBanner roundTripMs={ping.roundTripMs} grade={ping.grade} />
 
             {error && <div className={shell.error}>{error}</div>}
 
             <div className={`${shell.info} ${styles.scoreLine}`}>{scoreLine}</div>
 
             <div className={styles.court}>
-                <PongCourt room={room} state={state} mySlot={mySlot} isSpectator={isSpectator} />
+                <PongCourt
+                    room={room}
+                    state={state}
+                    mySlot={mySlot}
+                    isSpectator={isSpectator}
+                    roundTripMs={ping.roundTripMs}
+                />
             </div>
 
             <GameOverPanel

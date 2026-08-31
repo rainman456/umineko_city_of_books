@@ -5,7 +5,11 @@ import { usePageTitle } from "../../hooks/usePageTitle";
 import { useGameRoom } from "../../hooks/queries/gameRoom";
 import { useAcceptGameInvite, useDeclineGameInvite } from "../../hooks/mutations/gameRoom";
 import { GameChat } from "../../components/games/chat/GameChat";
+import { LatencyBanner } from "../../components/games/LatencyBanner";
 import { Button } from "../../components/Button/Button";
+import { ConfirmDialog } from "../../components/ConfirmDialog/ConfirmDialog";
+import { isRealtimeGame } from "../../domain/games/latency";
+import { useServerPing } from "../../hooks/useServerPing";
 import type { GameRoom, User } from "../../types/api";
 import styles from "./GamesPages.module.css";
 
@@ -27,10 +31,17 @@ export function GameRoomShell<TState, TStats>({ gameName, inviteCopy, Board }: G
     const navigate = useNavigate();
     const { room, loading, error, refetch } = useGameRoom<TState, TStats>(id);
     const [acceptError, setAcceptError] = useState("");
+    const [confirmSlowLink, setConfirmSlowLink] = useState(false);
     const acceptInvite = useAcceptGameInvite();
     const declineInvite = useDeclineGameInvite();
 
     usePageTitle(room ? `${gameName} - ${room.players.map(p => p.display_name).join(" vs ")}` : gameName);
+
+    const isParticipant = user && room ? room.players.some(p => p.user_id === user.id) : false;
+    const isInvitee = user && room ? room.created_by !== user.id && isParticipant : false;
+    const awaitingAccept = room?.status === "pending" && isInvitee && isRealtimeGame(room.game_type);
+
+    const ping = useServerPing(awaitingAccept);
 
     if (!id) {
         return null;
@@ -52,9 +63,6 @@ export function GameRoomShell<TState, TStats>({ gameName, inviteCopy, Board }: G
     if (!room) {
         return null;
     }
-
-    const isParticipant = user ? room.players.some(p => p.user_id === user.id) : false;
-    const isInvitee = user ? room.created_by !== user.id && isParticipant : false;
 
     if (room.status === "declined") {
         return (
@@ -83,7 +91,8 @@ export function GameRoomShell<TState, TStats>({ gameName, inviteCopy, Board }: G
 
         const opponent = room.players.find(p => p.user_id !== user?.id);
 
-        const handleAccept = async () => {
+        const acceptNow = async () => {
+            setConfirmSlowLink(false);
             setAcceptError("");
             try {
                 await acceptInvite.mutateAsync(room.id);
@@ -91,6 +100,15 @@ export function GameRoomShell<TState, TStats>({ gameName, inviteCopy, Board }: G
             } catch (err) {
                 setAcceptError(err instanceof Error ? err.message : "Failed to accept invite");
             }
+        };
+
+        const handleAccept = async () => {
+            if (ping.grade === "poor") {
+                setConfirmSlowLink(true);
+                return;
+            }
+
+            await acceptNow();
         };
 
         const handleDecline = async () => {
@@ -130,6 +148,25 @@ export function GameRoomShell<TState, TStats>({ gameName, inviteCopy, Board }: G
                     </Button>
                 </div>
                 {acceptError && <div className={styles.error}>{acceptError}</div>}
+                {isInvitee && <LatencyBanner roundTripMs={ping.roundTripMs} grade={ping.grade} />}
+                <ConfirmDialog
+                    open={confirmSlowLink}
+                    title="Your connection is slow"
+                    body={
+                        <>
+                            <p>
+                                Your connection to the game server is {Math.round(ping.roundTripMs ?? 0)}ms. {gameName}{" "}
+                                is played in real time, so your moves will reach the server late and you will have to
+                                aim ahead of what you see.
+                            </p>
+                            <p>You can still accept, but the match may not be playable.</p>
+                        </>
+                    }
+                    confirmLabel="Accept anyway"
+                    cancelLabel="Go back"
+                    onConfirm={acceptNow}
+                    onCancel={() => setConfirmSlowLink(false)}
+                />
             </div>
         );
     }

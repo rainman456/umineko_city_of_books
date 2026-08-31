@@ -16,6 +16,11 @@ function lastFrame(): string {
 
 const commands: { name: RealtimeCommandName; command: RealtimeCommand; wire: string }[] = [
     {
+        name: "ping",
+        command: { type: "ping", data: { nonce: 4 } },
+        wire: '{"type":"ping","data":{"nonce":4}}',
+    },
+    {
         name: "join_room",
         command: { type: "join_room", data: { room_id: "room-1" } },
         wire: '{"type":"join_room","data":{"room_id":"room-1"}}',
@@ -136,13 +141,13 @@ describe("realtime command name table", () => {
         expect([...table].sort()).toEqual([...declared].sort());
     });
 
-    it("has nine commands", () => {
+    it("has ten commands", () => {
         // given
         // when
         const table = Object.values(REALTIME_COMMANDS);
 
         // then
-        expect(table).toHaveLength(9);
-        expect(new Set(table).size).toBe(9);
+        expect(table).toHaveLength(10);
+        expect(new Set(table).size).toBe(10);
     });
 });

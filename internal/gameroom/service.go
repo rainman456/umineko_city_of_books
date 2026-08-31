@@ -64,6 +64,7 @@ type (
 		HandleClientJoin(ctx context.Context, userID, roomID uuid.UUID)
 		HandleClientLeave(userID, roomID uuid.UUID)
 		HandleClientInput(userID, roomID uuid.UUID, payload json.RawMessage)
+		HandleClientPing(userID uuid.UUID, rttMS int)
 		Shutdown(ctx context.Context)
 		CancelIdleGames(ctx context.Context) (int, error)
 	}

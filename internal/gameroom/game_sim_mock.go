@@ -130,6 +130,52 @@ func (_c *MockGameSim_SetConnected_Call) RunAndReturn(run func(slot int, connect
 	return _c
 }
 
+// SetPing provides a mock function for the type MockGameSim
+func (_mock *MockGameSim) SetPing(slot int, rttMS int) {
+	_mock.Called(slot, rttMS)
+	return
+}
+
+// MockGameSim_SetPing_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetPing'
+type MockGameSim_SetPing_Call struct {
+	*mock.Call
+}
+
+// SetPing is a helper method to define mock.On call
+//   - slot int
+//   - rttMS int
+func (_e *MockGameSim_Expecter) SetPing(slot any, rttMS any) *MockGameSim_SetPing_Call {
+	return &MockGameSim_SetPing_Call{Call: _e.mock.On("SetPing", slot, rttMS)}
+}
+
+func (_c *MockGameSim_SetPing_Call) Run(run func(slot int, rttMS int)) *MockGameSim_SetPing_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 int
+		if args[0] != nil {
+			arg0 = args[0].(int)
+		}
+		var arg1 int
+		if args[1] != nil {
+			arg1 = args[1].(int)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockGameSim_SetPing_Call) Return() *MockGameSim_SetPing_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockGameSim_SetPing_Call) RunAndReturn(run func(slot int, rttMS int)) *MockGameSim_SetPing_Call {
+	_c.Run(run)
+	return _c
+}
+
 // Snapshot provides a mock function for the type MockGameSim
 func (_mock *MockGameSim) Snapshot() any {
 	ret := _mock.Called()

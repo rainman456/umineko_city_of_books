@@ -949,6 +949,52 @@ func (_c *MockService_HandleClientLeave_Call) RunAndReturn(run func(userID uuid.
 	return _c
 }
 
+// HandleClientPing provides a mock function for the type MockService
+func (_mock *MockService) HandleClientPing(userID uuid.UUID, rttMS int) {
+	_mock.Called(userID, rttMS)
+	return
+}
+
+// MockService_HandleClientPing_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'HandleClientPing'
+type MockService_HandleClientPing_Call struct {
+	*mock.Call
+}
+
+// HandleClientPing is a helper method to define mock.On call
+//   - userID uuid.UUID
+//   - rttMS int
+func (_e *MockService_Expecter) HandleClientPing(userID any, rttMS any) *MockService_HandleClientPing_Call {
+	return &MockService_HandleClientPing_Call{Call: _e.mock.On("HandleClientPing", userID, rttMS)}
+}
+
+func (_c *MockService_HandleClientPing_Call) Run(run func(userID uuid.UUID, rttMS int)) *MockService_HandleClientPing_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 uuid.UUID
+		if args[0] != nil {
+			arg0 = args[0].(uuid.UUID)
+		}
+		var arg1 int
+		if args[1] != nil {
+			arg1 = args[1].(int)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockService_HandleClientPing_Call) Return() *MockService_HandleClientPing_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockService_HandleClientPing_Call) RunAndReturn(run func(userID uuid.UUID, rttMS int)) *MockService_HandleClientPing_Call {
+	_c.Run(run)
+	return _c
+}
+
 // Invite provides a mock function for the type MockService
 func (_mock *MockService) Invite(ctx context.Context, inviterID uuid.UUID, opponentID uuid.UUID, gameType dto.GameType) (*dto.GameRoom, error) {
 	ret := _mock.Called(ctx, inviterID, opponentID, gameType)

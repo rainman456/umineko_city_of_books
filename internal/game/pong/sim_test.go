@@ -542,6 +542,59 @@ func TestSim_SetConnectedFreezesTheTarget(t *testing.T) {
 	assert.Equal(t, [2]bool{true, false}, s.connected)
 }
 
+func TestSim_SetPing(t *testing.T) {
+	tests := []struct {
+		name string
+		slot int
+		rtt  int
+		want [2]int
+	}{
+		{name: "the first slot's ping is recorded", slot: 0, rtt: 24, want: [2]int{24, 0}},
+		{name: "the second slot's ping is recorded", slot: 1, rtt: 240, want: [2]int{0, 240}},
+		{name: "a slot below the board is ignored", slot: -1, rtt: 240, want: [2]int{0, 0}},
+		{name: "a slot above the board is ignored", slot: 2, rtt: 240, want: [2]int{0, 0}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// given
+			s := rallySim(t)
+
+			// when
+			s.SetPing(tt.slot, tt.rtt)
+
+			// then
+			assert.Equal(t, tt.want, s.ping)
+		})
+	}
+}
+
+func TestSim_SnapshotCarriesBothPingsSoEveryoneWatchingSeesThem(t *testing.T) {
+	// given
+	s := rallySim(t)
+	s.SetPing(0, 24)
+	s.SetPing(1, 240)
+
+	// when
+	f, ok := s.Snapshot().(frame)
+	require.True(t, ok)
+
+	// then
+	assert.Equal(t, [2]int{24, 240}, f.Ping)
+}
+
+func TestSim_DisconnectingClearsThePing(t *testing.T) {
+	// given
+	s := rallySim(t)
+	s.SetPing(1, 240)
+
+	// when
+	s.SetConnected(1, false)
+
+	// then
+	assert.Equal(t, [2]int{0, 0}, s.ping)
+}
+
 func TestSim_SnapshotClearsEventsAndReportsTheClock(t *testing.T) {
 	// given
 	s := rallySim(t)

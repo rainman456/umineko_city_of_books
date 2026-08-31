@@ -43,6 +43,99 @@ func TestOriginAllowed(t *testing.T) {
 	}
 }
 
+func TestReplyPong(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{
+			name: "the probe nonce is echoed so a client can match the reply to its own probe",
+			data: `{"nonce":42}`,
+			want: `{"type":"pong","data":{"nonce":42}}`,
+		},
+		{
+			name: "a keepalive ping with no nonce is answered without one",
+			data: `{}`,
+			want: `{"type":"pong","data":{}}`,
+		},
+		{
+			name: "an absent payload is answered without a nonce",
+			data: "",
+			want: `{"type":"pong","data":{}}`,
+		},
+		{
+			name: "an unreadable payload is answered without a nonce rather than dropped",
+			data: `"not an object"`,
+			want: `{"type":"pong","data":{}}`,
+		},
+		{
+			name: "the reported round trip is not echoed back to the reporter",
+			data: `{"nonce":7,"rtt":240}`,
+			want: `{"type":"pong","data":{"nonce":7}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// given
+			client := NewClient(uuid.New(), nil)
+
+			// when
+			replyPong(client, parsePing(json.RawMessage(tt.data)))
+
+			// then
+			select {
+			case got := <-client.send:
+				assert.JSONEq(t, tt.want, string(got))
+			default:
+				t.Fatal("no pong was queued")
+			}
+		})
+	}
+}
+
+func TestParsePing(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want pingData
+	}{
+		{
+			name: "a reported round trip is kept",
+			data: `{"nonce":3,"rtt":240}`,
+			want: pingData{Nonce: 3, RTT: 240},
+		},
+		{
+			name: "a round trip beyond anything playable is discarded rather than displayed",
+			data: `{"nonce":3,"rtt":600000}`,
+			want: pingData{Nonce: 3},
+		},
+		{
+			name: "a negative round trip is discarded",
+			data: `{"nonce":3,"rtt":-5}`,
+			want: pingData{Nonce: 3},
+		},
+		{
+			name: "an unreadable payload yields nothing rather than an error",
+			data: `[1,2,3]`,
+			want: pingData{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// given the raw payload under test
+
+			// when
+			got := parsePing(json.RawMessage(tt.data))
+
+			// then
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestStillAuthorised(t *testing.T) {
 	// given
 	userID := uuid.New()

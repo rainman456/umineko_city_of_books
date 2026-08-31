@@ -1,6 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { pushFrame, sampleAt, serverNow, type BufferedFrame } from "./interpolate";
-import { PONG_BUFFER, PONG_EVENT_HIT_P0, PONG_EVENT_SCORE, PONG_STALE_MS, type PongFrame } from "./types";
+import {
+    projectBall,
+    pushFrame,
+    sampleAt,
+    sampleHistory,
+    serverNow,
+    smoothTowards,
+    type BufferedFrame,
+    type PongCourtBounds,
+} from "./interpolate";
+import {
+    PONG_BUFFER,
+    PONG_EVENT_HIT_P0,
+    PONG_EVENT_SCORE,
+    PONG_EXTRAPOLATE_MAX_MS,
+    PONG_STALE_MS,
+    type PongFrame,
+} from "./types";
+
+const bounds: PongCourtBounds = {
+    height: 800,
+    ballRadius: 10,
+    paddleHeight: 130,
+    faceX0: 58,
+    faceX1: 1142,
+};
 
 function makeFrame(t: number, overrides: Partial<PongFrame> = {}): PongFrame {
     return {
@@ -14,6 +38,7 @@ function makeFrame(t: number, overrides: Partial<PongFrame> = {}): PongFrame {
         paddle_y: [400, 400],
         scores: [0, 0],
         ack: [0, 0],
+        ping: [0, 0],
         connected: [true, true],
         serve_in_ms: 0,
         events: 0,
@@ -184,13 +209,151 @@ describe("serverNow", () => {
     });
 });
 
+describe("projectBall", () => {
+    it("carries the ball forward along its velocity", () => {
+        // given
+        const frame = makeFrame(0, { ball_x: 600, ball_y: 400, ball_vx: 900, ball_vy: 300 });
+
+        // when
+        const projected = projectBall(frame, 100, bounds);
+
+        // then
+        expect(projected.x).toBeCloseTo(690, 6);
+        expect(projected.y).toBeCloseTo(430, 6);
+    });
+
+    it("reflects off the top and bottom walls the way the server does", () => {
+        // given
+        const upward = makeFrame(0, { ball_x: 600, ball_y: 40, ball_vx: 900, ball_vy: -600 });
+        const downward = makeFrame(0, { ball_x: 600, ball_y: 760, ball_vx: 900, ball_vy: 600 });
+
+        // when
+        const top = projectBall(upward, 100, bounds);
+        const floor = projectBall(downward, 100, bounds);
+
+        // then
+        expect(top.y).toBeCloseTo(40, 6);
+        expect(floor.y).toBeCloseTo(760, 6);
+    });
+
+    it("holds the ball at the paddle face while a hit is still unconfirmed", () => {
+        // given
+        const frame = makeFrame(0, { ball_x: 120, ball_y: 400, ball_vx: -1400, ball_vy: 0, paddle_y: [400, 400] });
+
+        // when
+        const projected = projectBall(frame, 150, bounds);
+
+        // then
+        expect(projected.x).toBe(bounds.faceX0 + bounds.ballRadius);
+    });
+
+    it("lets the ball run past a paddle that cannot reach it", () => {
+        // given
+        const frame = makeFrame(0, { ball_x: 120, ball_y: 400, ball_vx: -1400, ball_vy: 0, paddle_y: [100, 400] });
+
+        // when
+        const projected = projectBall(frame, 150, bounds);
+
+        // then
+        expect(projected.x).toBeLessThan(bounds.faceX0);
+    });
+
+    it("stops projecting once the extrapolation cap is reached", () => {
+        // given
+        const frame = makeFrame(0, { ball_x: 600, ball_y: 400, ball_vx: 900, ball_vy: 0 });
+
+        // when
+        const capped = projectBall(frame, PONG_EXTRAPOLATE_MAX_MS + 500, bounds);
+
+        // then
+        expect(capped.x).toBeCloseTo(600 + 900 * (PONG_EXTRAPOLATE_MAX_MS / 1000), 6);
+    });
+
+    it("leaves the ball still outside a rally", () => {
+        // given
+        const frame = makeFrame(0, { phase: "serve", ball_x: 600, ball_y: 400, ball_vx: 900, ball_vy: 300 });
+
+        // when
+        const projected = projectBall(frame, 100, bounds);
+
+        // then
+        expect(projected).toEqual({ x: 600, y: 400 });
+    });
+});
+
+describe("sampleHistory", () => {
+    const history = [
+        { at: 1000, y: 100 },
+        { at: 1050, y: 200 },
+        { at: 1100, y: 300 },
+    ];
+
+    it("falls back while nothing has been recorded", () => {
+        // given / when
+        const y = sampleHistory([], 1000, 42);
+
+        // then
+        expect(y).toBe(42);
+    });
+
+    it("reads back where the paddle was at a moment in the past", () => {
+        // given / when
+        const y = sampleHistory(history, 1025, 0);
+
+        // then
+        expect(y).toBe(150);
+    });
+
+    it("lands exactly on a recorded moment", () => {
+        // given / when
+        const y = sampleHistory(history, 1050, 0);
+
+        // then
+        expect(y).toBe(200);
+    });
+
+    it("holds the newest entry rather than guessing ahead of it", () => {
+        // given / when
+        const y = sampleHistory(history, 9000, 0);
+
+        // then
+        expect(y).toBe(300);
+    });
+
+    it("holds the oldest entry when asked for a moment it no longer remembers", () => {
+        // given / when
+        const y = sampleHistory(history, 0, 0);
+
+        // then
+        expect(y).toBe(100);
+    });
+});
+
+describe("smoothTowards", () => {
+    it("covers half the gap in one half-life", () => {
+        // given / when
+        const eased = smoothTowards(0, 100, 30, 30);
+
+        // then
+        expect(eased).toBeCloseTo(50, 6);
+    });
+
+    it("snaps straight to the target when no time has passed", () => {
+        // given / when
+        const eased = smoothTowards(0, 100, 0, 30);
+
+        // then
+        expect(eased).toBe(100);
+    });
+});
+
 describe("sampleAt", () => {
     it("returns nothing for an empty buffer", () => {
         // given
         const buf: BufferedFrame[] = [];
 
         // when
-        const sample = sampleAt(buf, 0);
+        const sample = sampleAt(buf, 0, bounds);
 
         // then
         expect(sample).toBeNull();
@@ -204,7 +367,7 @@ describe("sampleAt", () => {
         ]);
 
         // when
-        const sample = sampleAt(buf, 25);
+        const sample = sampleAt(buf, 25, bounds);
 
         // then
         expect(sample?.ballX).toBe(50);
@@ -212,16 +375,38 @@ describe("sampleAt", () => {
         expect(sample?.paddleY).toEqual([150, 300]);
     });
 
-    it("holds the newest frame instead of extrapolating past it", () => {
+    it("extrapolates the ball past the newest frame so it is drawn at the present moment", () => {
         // given
-        const buf = buffered([makeFrame(0, { ball_x: 0 }), makeFrame(50, { ball_x: 100 })]);
+        const buf = buffered([makeFrame(0, { ball_x: 500 }), makeFrame(50, { ball_x: 600, ball_vx: 900 })]);
 
         // when
-        const sample = sampleAt(buf, 400);
+        const sample = sampleAt(buf, 150, bounds);
 
         // then
-        expect(sample?.ballX).toBe(100);
-        expect(sample?.t).toBe(50);
+        expect(sample?.ballX).toBeCloseTo(690, 6);
+        expect(sample?.t).toBe(150);
+    });
+
+    it("holds both paddles at their newest position rather than extrapolating them", () => {
+        // given
+        const buf = buffered([makeFrame(0, { paddle_y: [100, 200] }), makeFrame(50, { paddle_y: [300, 500] })]);
+
+        // when
+        const sample = sampleAt(buf, 150, bounds);
+
+        // then
+        expect(sample?.paddleY).toEqual([300, 500]);
+    });
+
+    it("counts the serve clock down while it runs ahead of the newest frame", () => {
+        // given
+        const buf = buffered([makeFrame(50, { phase: "serve", serve_in_ms: 1200 })]);
+
+        // when
+        const sample = sampleAt(buf, 250, bounds);
+
+        // then
+        expect(sample?.serveInMs).toBe(1000);
     });
 
     it("holds the oldest frame when the render clock sits before it", () => {
@@ -229,7 +414,7 @@ describe("sampleAt", () => {
         const buf = buffered([makeFrame(100, { ball_x: 60 }), makeFrame(150, { ball_x: 160 })]);
 
         // when
-        const sample = sampleAt(buf, 20);
+        const sample = sampleAt(buf, 20, bounds);
 
         // then
         expect(sample?.ballX).toBe(60);
@@ -240,7 +425,7 @@ describe("sampleAt", () => {
         const buf = buffered([makeFrame(0, { ball_x: 42, ball_y: 84 })]);
 
         // when
-        const sample = sampleAt(buf, 900);
+        const sample = sampleAt(buf, 0, bounds);
 
         // then
         expect(sample?.ballX).toBe(42);
@@ -255,7 +440,7 @@ describe("sampleAt", () => {
         ]);
 
         // when
-        const sample = sampleAt(buf, 40);
+        const sample = sampleAt(buf, 40, bounds);
 
         // then
         expect(sample?.scores).toEqual([1, 0]);
@@ -272,8 +457,8 @@ describe("sampleAt", () => {
         ]);
 
         // when
-        const early = sampleAt(buf, 60);
-        const late = sampleAt(buf, 120);
+        const early = sampleAt(buf, 60, bounds);
+        const late = sampleAt(buf, 120, bounds);
 
         // then
         expect(early?.events).toEqual([{ t: 50, events: PONG_EVENT_HIT_P0 }]);
@@ -288,7 +473,7 @@ describe("sampleAt", () => {
         const buf = buffered([makeFrame(0), makeFrame(50)]);
 
         // when
-        const sample = sampleAt(buf, 100);
+        const sample = sampleAt(buf, 100, bounds);
 
         // then
         expect(sample?.stale).toBe(false);
@@ -299,7 +484,7 @@ describe("sampleAt", () => {
         const buf = buffered([makeFrame(0), makeFrame(50)]);
 
         // when
-        const sample = sampleAt(buf, 50 + PONG_STALE_MS);
+        const sample = sampleAt(buf, 50 + PONG_STALE_MS + 1, bounds);
 
         // then
         expect(sample?.stale).toBe(true);
@@ -311,7 +496,7 @@ describe("sampleAt", () => {
 
         // when
         const revived = pushFrame(stale, makeFrame(5000, { ball_x: 900 }), 1050 + PONG_STALE_MS + 1);
-        const sample = sampleAt(revived, 5000);
+        const sample = sampleAt(revived, 5000, bounds);
 
         // then
         expect(sample?.ballX).toBe(900);

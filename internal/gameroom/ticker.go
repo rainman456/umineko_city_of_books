@@ -339,6 +339,21 @@ func (s *service) sendTickerSnapshot(roomID, userID uuid.UUID) {
 	s.hub.SendToUser(userID, ws.Message{Type: h.msgType, Data: snap})
 }
 
+func (s *service) HandleClientPing(userID uuid.UUID, rttMS int) {
+	s.tickMu.RLock()
+	handles := make([]*tickHandle, 0, len(s.ticks))
+	for _, h := range s.ticks {
+		if _, playing := h.slots[userID]; playing {
+			handles = append(handles, h)
+		}
+	}
+	s.tickMu.RUnlock()
+
+	for _, h := range handles {
+		h.sim.SetPing(h.slots[userID], rttMS)
+	}
+}
+
 func (s *service) HandleClientInput(userID, roomID uuid.UUID, payload json.RawMessage) {
 	h := s.tickerFor(roomID)
 	if h == nil {

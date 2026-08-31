@@ -362,6 +362,69 @@ func TestHandleClientInput_RoutesOnlyKnownPlayers(t *testing.T) {
 	}
 }
 
+func TestHandleClientPing_RoutesOnlyKnownPlayers(t *testing.T) {
+	roomID := uuid.New()
+	player0 := uuid.New()
+	player1 := uuid.New()
+	spectator := uuid.New()
+
+	cases := []struct {
+		name     string
+		userID   uuid.UUID
+		wantSlot int
+		wantSet  bool
+	}{
+		{name: "the first player is reported against their own slot", userID: player0, wantSlot: 0, wantSet: true},
+		{name: "the second player is reported against their own slot", userID: player1, wantSlot: 1, wantSet: true},
+		{name: "a spectator reports no ping, since they hold no slot", userID: spectator},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				// given
+				step := 10 * time.Millisecond
+				tm := newTickerTest(t, step)
+				tm.tickReturns()
+				if tc.wantSet {
+					tm.sim.EXPECT().SetPing(tc.wantSlot, 240).Once()
+				}
+				tm.start(roomID, twoPlayers(player0, player1))
+
+				// when
+				tm.svc.HandleClientPing(tc.userID, 240)
+				synctest.Sleep(step)
+
+				// then
+				tm.svc.stopTicker(roomID, false)
+				synctest.Wait()
+				tm.sim.AssertExpectations(t)
+			})
+		})
+	}
+}
+
+func TestHandleClientPing_IgnoresAGameTheReporterIsNotIn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		// given
+		step := 10 * time.Millisecond
+		tm := newTickerTest(t, step)
+		tm.tickReturns()
+		roomID := uuid.New()
+		player0, player1 := uuid.New(), uuid.New()
+		tm.start(roomID, twoPlayers(player0, player1))
+
+		// when
+		tm.svc.HandleClientPing(uuid.New(), 240)
+		synctest.Sleep(step)
+
+		// then
+		tm.svc.stopTicker(roomID, false)
+		synctest.Wait()
+		tm.sim.AssertNotCalled(t, "SetPing", mock.Anything, mock.Anything)
+	})
+}
+
 func TestHandleClientJoin_ResumesTickerOnceForConcurrentJoins(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// given

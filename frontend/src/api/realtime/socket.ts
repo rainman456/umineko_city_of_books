@@ -1,5 +1,6 @@
 import { getAuthToken } from "../authToken";
 import { isNativeApp } from "../../platform/capabilities";
+import { afterDebugLag } from "./debugLag";
 
 type FrameHandler = (raw: string) => void;
 
@@ -165,9 +166,11 @@ function connect(): void {
 
         const raw = event.data as string;
 
-        for (const handler of frameHandlers) {
-            handler(raw);
-        }
+        afterDebugLag(() => {
+            for (const handler of frameHandlers) {
+                handler(raw);
+            }
+        });
     };
 
     socket.onclose = () => {
@@ -231,9 +234,11 @@ export function closeRealtimeSocket(sessionKey: string): void {
 }
 
 export function sendRaw(payload: string): void {
-    if (state.socket && state.socket.readyState === WebSocket.OPEN) {
-        state.socket.send(payload);
-    }
+    afterDebugLag(() => {
+        if (state.socket && state.socket.readyState === WebSocket.OPEN) {
+            state.socket.send(payload);
+        }
+    });
 }
 
 export function onFrame(handler: FrameHandler): () => void {

@@ -37,6 +37,7 @@ type (
 		Tick(step time.Duration) TickResult
 		ApplyInput(slot int, payload json.RawMessage)
 		SetConnected(slot int, connected bool)
+		SetPing(slot int, rttMS int)
 		Snapshot() any
 		StateJSON() (string, error)
 	}

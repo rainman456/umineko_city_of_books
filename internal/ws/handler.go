@@ -28,6 +28,7 @@ const (
 	localsTokenKey        = "ws.token"
 	localsAnonKey         = "ws.anon"
 	sessionRecheckEvery   = 5 * time.Minute
+	maxReportedRTTMS      = 5000
 	readDeadline          = 90 * time.Second
 	membershipCheckLimit  = 3 * time.Second
 
@@ -55,6 +56,7 @@ type (
 		HandleClientJoin(ctx context.Context, userID, roomID uuid.UUID)
 		HandleClientLeave(userID, roomID uuid.UUID)
 		HandleClientInput(userID, roomID uuid.UUID, payload json.RawMessage)
+		HandleClientPing(userID uuid.UUID, rttMS int)
 	}
 
 	WatchPartyDisconnectHandler interface {
@@ -64,6 +66,11 @@ type (
 	incomingMessage struct {
 		Type string          `json:"type"`
 		Data json.RawMessage `json:"data"`
+	}
+
+	pingData struct {
+		Nonce int `json:"nonce,omitempty"`
+		RTT   int `json:"rtt,omitempty"`
 	}
 
 	roomActionData struct {
@@ -379,11 +386,35 @@ func runAnonReader(hub *Hub, conn *websocket.Conn) {
 		recordInbound(msg.Type, tokens)
 
 		if msg.Type == "ping" {
-			if data, marshalErr := json.Marshal(Message{Type: "pong", Data: map[string]any{}}); marshalErr == nil {
-				client.enqueue(data)
-			}
+			replyPong(client, parsePing(msg.Data))
 		}
 	}
+}
+
+func parsePing(raw json.RawMessage) pingData {
+	var in pingData
+	if len(raw) == 0 {
+		return in
+	}
+
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return pingData{}
+	}
+
+	if in.RTT < 0 || in.RTT > maxReportedRTTMS {
+		in.RTT = 0
+	}
+
+	return in
+}
+
+func replyPong(client *Client, in pingData) {
+	data, err := json.Marshal(Message{Type: "pong", Data: pingData{Nonce: in.Nonce}})
+	if err != nil {
+		return
+	}
+
+	client.enqueue(data)
 }
 
 func handleWSMessage(client *Client, msg incomingMessage, hub *Hub, memberChecker RoomMembershipChecker, gamePresence GameRoomPresence, joinedGameRooms map[uuid.UUID]bool) {
@@ -514,8 +545,11 @@ func handleWSMessage(client *Client, msg incomingMessage, hub *Hub, memberChecke
 		delete(joinedGameRooms, roomID)
 
 	case "ping":
-		if data, marshalErr := json.Marshal(Message{Type: "pong", Data: map[string]any{}}); marshalErr == nil {
-			client.enqueue(data)
+		in := parsePing(msg.Data)
+		replyPong(client, in)
+
+		if gamePresence != nil && in.RTT > 0 {
+			gamePresence.HandleClientPing(userID, in.RTT)
 		}
 	}
 }

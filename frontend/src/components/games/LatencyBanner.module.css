@@ -1,0 +1,22 @@
+.latencyBanner {
+    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 0.9rem;
+    text-align: center;
+}
+
+.fair {
+    background: rgba(212, 168, 75, 0.12);
+    border: 1px solid rgba(212, 168, 75, 0.45);
+}
+
+.poor {
+    background: rgba(220, 80, 80, 0.15);
+    border: 1px solid rgba(220, 80, 80, 0.5);
+}
+
+.reading {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}

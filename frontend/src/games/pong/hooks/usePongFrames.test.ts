@@ -47,6 +47,7 @@ function makeFrame(t: number, overrides: Partial<PongFrame> = {}): PongFrame {
         paddle_y: [400, 400],
         scores: [0, 0],
         ack: [0, 0],
+        ping: [0, 0],
         connected: [true, true],
         serve_in_ms: 0,
         events: 0,

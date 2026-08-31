@@ -29,6 +29,7 @@ type (
 		sweptFrom [2]float64
 		target    [2]float64
 		ackSeq    [2]int
+		ping      [2]int
 		connected [2]bool
 		events    int
 		phaseTick int
@@ -45,6 +46,7 @@ type (
 		PaddleY   [2]int  `json:"paddle_y"`
 		Scores    [2]int  `json:"scores"`
 		Ack       [2]int  `json:"ack"`
+		Ping      [2]int  `json:"ping"`
 		Connected [2]bool `json:"connected"`
 		ServeInMS int     `json:"serve_in_ms"`
 		Events    int     `json:"events"`
@@ -358,6 +360,21 @@ func (s *sim) SetConnected(slot int, connected bool) {
 
 	s.target[slot] = s.paddleY[slot]
 	s.connected[slot] = connected
+
+	if !connected {
+		s.ping[slot] = 0
+	}
+}
+
+func (s *sim) SetPing(slot int, rttMS int) {
+	if slot < 0 || slot > 1 {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.ping[slot] = rttMS
 }
 
 func (s *sim) Snapshot() any {
@@ -375,6 +392,7 @@ func (s *sim) Snapshot() any {
 		PaddleY:   [2]int{roundInt(s.paddleY[0]), roundInt(s.paddleY[1])},
 		Scores:    s.st.Scores,
 		Ack:       s.ackSeq,
+		Ping:      s.ping,
 		Connected: s.connected,
 		ServeInMS: s.phaseTick * 1000 / tickHz,
 		Events:    s.events,
