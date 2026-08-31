@@ -26,6 +26,7 @@ type (
 		speed     float64
 		paddleY   [2]float64
 		paddleVY  [2]float64
+		sweptFrom [2]float64
 		target    [2]float64
 		ackSeq    [2]int
 		connected [2]bool
@@ -87,6 +88,7 @@ func newSim(roomID uuid.UUID, stateJSON string, rng *rand.Rand) (*sim, error) {
 
 	for i := range 2 {
 		s.paddleY[i] = float64(s.st.PaddleY[i])
+		s.sweptFrom[i] = float64(s.st.PaddleY[i])
 		s.target[i] = float64(s.st.PaddleY[i])
 	}
 
@@ -129,9 +131,18 @@ func (s *sim) movePaddles(dt float64) {
 	for i := range 2 {
 		next := clamp(s.target[i], paddleHeight/2.0, boardHeight-paddleHeight/2.0)
 		delta := next - s.paddleY[i]
+
+		s.sweptFrom[i] = s.paddleY[i]
 		s.paddleY[i] = next
 		s.paddleVY[i] = clamp(delta/dt, -paddleMaxSpeed, paddleMaxSpeed)
 	}
+}
+
+func (s *sim) paddleFaceAt(slot int, contactY float64) float64 {
+	lo := math.Min(s.sweptFrom[slot], s.paddleY[slot])
+	hi := math.Max(s.sweptFrom[slot], s.paddleY[slot])
+
+	return clamp(contactY, lo, hi)
 }
 
 func (s *sim) countDownToServe() {
@@ -168,7 +179,7 @@ func (s *sim) sweepLeft(prevX, prevY, dt float64) {
 
 	t := (lead0 - faceX0) / (lead0 - lead1)
 	contactY := foldIntoCourt(prevY + (s.ballY-prevY)*t)
-	if math.Abs(contactY-s.paddleY[0]) > paddleHeight/2.0+ballRadius {
+	if math.Abs(contactY-s.paddleFaceAt(0, contactY)) > paddleHeight/2.0+ballRadius {
 		return
 	}
 
@@ -195,7 +206,7 @@ func (s *sim) sweepRight(prevX, prevY, dt float64) {
 
 	t := (faceX1 - lead0) / (lead1 - lead0)
 	contactY := foldIntoCourt(prevY + (s.ballY-prevY)*t)
-	if math.Abs(contactY-s.paddleY[1]) > paddleHeight/2.0+ballRadius {
+	if math.Abs(contactY-s.paddleFaceAt(1, contactY)) > paddleHeight/2.0+ballRadius {
 		return
 	}
 
@@ -214,7 +225,7 @@ func (s *sim) sweepRight(prevX, prevY, dt float64) {
 }
 
 func (s *sim) bounce(slot int, contactY float64) {
-	offset := clamp((contactY-s.paddleY[slot])/(paddleHeight/2.0), -1, 1)
+	offset := clamp((contactY-s.paddleFaceAt(slot, contactY))/(paddleHeight/2.0), -1, 1)
 	s.speed = math.Min(s.speed*ballSpeedGain, ballSpeedMax)
 
 	dir := 1.0

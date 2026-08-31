@@ -21,7 +21,7 @@ export interface PongFrame {
 export const PONG_FRAME_TYPE = "game_pong_frame";
 export const PONG_INPUT_TYPE = "game_room_input";
 
-export const PONG_INPUT_INTERVAL_MS = 50;
+export const PONG_INPUT_INTERVAL_MS = 20;
 export const PONG_INPUT_KEEPALIVE_MS = 500;
 export const PONG_INPUT_EPSILON = 4;
 export const PONG_RENDER_DELAY_MS = 100;

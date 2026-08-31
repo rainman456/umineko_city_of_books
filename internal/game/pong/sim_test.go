@@ -250,19 +250,29 @@ func TestSim_SpeedRampReachesCapAndHolds(t *testing.T) {
 func TestSim_ChasingPaddleDoesNotRecollide(t *testing.T) {
 	cases := []struct {
 		name       string
+		startY     float64
 		target     float64
 		wantHits   int
 		wantBounce bool
 	}{
 		{
 			name:       "a paddle still within reach hits once and never twice",
+			startY:     boardHeight / 2,
 			target:     boardHeight/2 + 40,
 			wantHits:   1,
 			wantBounce: true,
 		},
 		{
-			name:       "a paddle moved out of reach misses, because it tracks the pointer exactly",
+			name:       "a paddle swept far past the ball still catches it, because it crossed the ball on the way",
+			startY:     boardHeight / 2,
 			target:     boardHeight/2 + 200,
+			wantHits:   1,
+			wantBounce: true,
+		},
+		{
+			name:       "a paddle that was never near the ball during the tick misses",
+			startY:     boardHeight/2 + 300,
+			target:     boardHeight/2 + 300,
 			wantHits:   0,
 			wantBounce: false,
 		},
@@ -277,7 +287,8 @@ func TestSim_ChasingPaddleDoesNotRecollide(t *testing.T) {
 			s.ballY = boardHeight / 2
 			s.ballVX = -ballSpeedStart
 			s.ballVY = 0
-			s.paddleY[0] = boardHeight / 2
+			s.paddleY[0] = tt.startY
+			s.sweptFrom[0] = tt.startY
 			s.target[0] = tt.target
 
 			// when
@@ -292,6 +303,41 @@ func TestSim_ChasingPaddleDoesNotRecollide(t *testing.T) {
 			if tt.wantBounce {
 				assert.GreaterOrEqual(t, s.ballX, float64(faceX0+ballRadius))
 			}
+		})
+	}
+}
+
+func TestSim_BallCannotPhaseThroughAPaddleThatJumped(t *testing.T) {
+	// given
+	jumps := []struct {
+		name string
+		from float64
+		to   float64
+	}{
+		{name: "a jump downward across the ball", from: boardHeight/2 - 250, to: boardHeight/2 + 250},
+		{name: "a jump upward across the ball", from: boardHeight/2 + 250, to: boardHeight/2 - 250},
+		{name: "a jump that lands exactly on the ball", from: boardHeight/2 - 250, to: boardHeight / 2},
+		{name: "a jump that starts on the ball and leaves", from: boardHeight / 2, to: boardHeight/2 + 250},
+	}
+
+	for _, tt := range jumps {
+		t.Run(tt.name, func(t *testing.T) {
+			s := rallySim(t)
+			s.speed = ballSpeedStart
+			s.ballX = faceX0 + ballRadius + 5
+			s.ballY = boardHeight / 2
+			s.ballVX = -ballSpeedStart
+			s.ballVY = 0
+			s.paddleY[0] = tt.from
+			s.sweptFrom[0] = tt.from
+			s.target[0] = tt.to
+
+			// when
+			s.Tick(tickInterval)
+
+			// then
+			assert.Equal(t, 1, s.st.Hits[0], "a paddle that swept across the ball must not be phased through")
+			assert.Greater(t, s.ballVX, 0.0, "the ball must be sent back up the court")
 		})
 	}
 }
