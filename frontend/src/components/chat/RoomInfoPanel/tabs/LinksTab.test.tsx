@@ -12,8 +12,22 @@ vi.mock("../../../../hooks/queries/chat", () => ({ useChatRoomAttachments }));
 
 const roomId = "room-1";
 
-function stub(messages: ChatMessage[], loading = false) {
-    useChatRoomAttachments.mockReturnValue({ messages, loading, refresh: vi.fn() });
+function stub(messages: ChatMessage[], loading = false, more: Partial<AttachmentStub> = {}) {
+    useChatRoomAttachments.mockReturnValue({
+        messages,
+        loading,
+        loadingMore: false,
+        hasMore: false,
+        loadMore: vi.fn(),
+        refresh: vi.fn(),
+        ...more,
+    });
+}
+
+interface AttachmentStub {
+    loadingMore: boolean;
+    hasMore: boolean;
+    loadMore: () => void;
 }
 
 function withBody(id: string, body: string): ChatMessage {

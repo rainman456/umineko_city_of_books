@@ -1,6 +1,6 @@
 ﻿import type { AttachmentKind } from "../../api/endpoints/chat";
 import { useCallback } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
     getChatRoomMembers,
     getChatRoomAttachments,
@@ -18,6 +18,7 @@ import {
 import { queryClient } from "../../api/queryClient";
 import { queryKeys, type RoomsListParams } from "../../api/queryKeys";
 import { dmRoomsOf } from "../../domain/chat/dmRoster";
+import { beforeCursor } from "../../domain/chat/messageStore";
 import type { ChatRoom } from "../../types/api";
 import { useAuth } from "../useAuth";
 
@@ -179,14 +180,33 @@ export function useChatRoomBannedWords(roomId: string, enabled = true) {
     return { rules: query.data?.rules ?? [], loading: query.isLoading, refresh: query.refetch };
 }
 
+const ATTACHMENT_PAGE_SIZE = 50;
+
 export function useChatRoomAttachments(roomId: string, kind: AttachmentKind, enabled = true) {
-    const query = useQuery({
+    const query = useInfiniteQuery({
         queryKey: queryKeys.chat.attachments(roomId, kind),
-        queryFn: () => getChatRoomAttachments(roomId, kind),
+        queryFn: ({ pageParam }) => getChatRoomAttachments(roomId, kind, pageParam, ATTACHMENT_PAGE_SIZE),
+        initialPageParam: undefined as string | undefined,
+        getNextPageParam: lastPage => {
+            if (lastPage.messages.length < ATTACHMENT_PAGE_SIZE) {
+                return undefined;
+            }
+
+            const oldest = lastPage.messages[lastPage.messages.length - 1];
+
+            return beforeCursor(oldest);
+        },
         enabled: enabled && !!roomId,
     });
 
-    return { messages: query.data?.messages ?? [], loading: query.isLoading, refresh: query.refetch };
+    return {
+        messages: query.data?.pages.flatMap(page => page.messages) ?? [],
+        loading: query.isLoading,
+        loadingMore: query.isFetchingNextPage,
+        hasMore: query.hasNextPage,
+        loadMore: query.fetchNextPage,
+        refresh: query.refetch,
+    };
 }
 
 export function useChatRoomPinnedMessages(roomId: string, enabled = true) {

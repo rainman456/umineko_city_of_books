@@ -1,5 +1,6 @@
 import type { ChatMessage, PostMedia } from "../../../../types/api";
 import { useChatRoomAttachments } from "../../../../hooks/queries/chat";
+import { useLoadMoreOnView } from "../useLoadMoreOnView";
 import { AudioThumb } from "../../../AudioAttachment/AudioAttachment";
 import { RelativeTimestamp } from "../../../RelativeTimestamp/RelativeTimestamp";
 import styles from "./MediaTab.module.css";
@@ -30,7 +31,8 @@ function flatten(messages: ChatMessage[]): Cell[] {
 }
 
 export function MediaTab({ roomId, isActive, onJump, onJumped, onLightbox }: MediaTabProps) {
-    const { messages, loading } = useChatRoomAttachments(roomId, "media", isActive);
+    const { messages, loading, loadingMore, hasMore, loadMore } = useChatRoomAttachments(roomId, "media", isActive);
+    const sentinelRef = useLoadMoreOnView({ hasMore, loadingMore, loadMore });
     const cells = flatten(messages);
 
     if (loading) {
@@ -91,6 +93,11 @@ export function MediaTab({ roomId, isActive, onJump, onJumped, onLightbox }: Med
                     </button>
                 </div>
             ))}
+            {hasMore && (
+                <div ref={sentinelRef} className={styles.sentinel}>
+                    {loadingMore ? "Loading..." : ""}
+                </div>
+            )}
         </div>
     );
 }

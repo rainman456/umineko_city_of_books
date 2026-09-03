@@ -1,5 +1,6 @@
 import type { ChatMessage } from "../../../../types/api";
 import { useChatRoomAttachments } from "../../../../hooks/queries/chat";
+import { useLoadMoreOnView } from "../useLoadMoreOnView";
 import { previewableURLs } from "../../../../domain/links";
 import { RelativeTimestamp } from "../../../RelativeTimestamp/RelativeTimestamp";
 import styles from "./LinksTab.module.css";
@@ -48,7 +49,8 @@ function flatten(messages: ChatMessage[]): Row[] {
 }
 
 export function LinksTab({ roomId, isActive, onJump, onJumped }: LinksTabProps) {
-    const { messages, loading } = useChatRoomAttachments(roomId, "links", isActive);
+    const { messages, loading, loadingMore, hasMore, loadMore } = useChatRoomAttachments(roomId, "links", isActive);
+    const sentinelRef = useLoadMoreOnView({ hasMore, loadingMore, loadMore });
     const rows = flatten(messages);
 
     if (loading) {
@@ -92,6 +94,11 @@ export function LinksTab({ roomId, isActive, onJump, onJumped }: LinksTabProps) 
                     </div>
                 </div>
             ))}
+            {hasMore && (
+                <div ref={sentinelRef} className={styles.sentinel}>
+                    {loadingMore ? "Loading..." : ""}
+                </div>
+            )}
         </div>
     );
 }
