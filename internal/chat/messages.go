@@ -14,6 +14,7 @@ import (
 	"umineko_city_of_books/internal/mention"
 	"umineko_city_of_books/internal/repository"
 	"umineko_city_of_books/internal/role"
+	"umineko_city_of_books/internal/text"
 	"umineko_city_of_books/internal/upload"
 	"umineko_city_of_books/internal/ws"
 
@@ -89,12 +90,8 @@ type (
 )
 
 func (m *messagesService) GetMessages(ctx context.Context, userID, roomID uuid.UUID, limit, offset int) (*dto.ChatMessageListResponse, error) {
-	isMember, err := m.chatRepo.IsMember(ctx, roomID, userID)
-	if err != nil {
-		return nil, fmt.Errorf("check membership: %w", err)
-	}
-	if !isMember {
-		return nil, ErrNotMember
+	if err := m.assertRoomMember(ctx, roomID, userID); err != nil {
+		return nil, err
 	}
 
 	page := bounds.NewPage(limit, offset)
@@ -113,24 +110,34 @@ func (m *messagesService) GetMessages(ctx context.Context, userID, roomID uuid.U
 }
 
 func (m *messagesService) GetMessagesBefore(ctx context.Context, userID, roomID uuid.UUID, before string, limit int) (*dto.ChatMessageListResponse, error) {
-	isMember, err := m.chatRepo.IsMember(ctx, roomID, userID)
-	if err != nil {
-		return nil, fmt.Errorf("check membership: %w", err)
-	}
-	if !isMember {
-		return nil, ErrNotMember
+	if err := m.assertRoomMember(ctx, roomID, userID); err != nil {
+		return nil, err
 	}
 
-	if limit <= 0 {
-		limit = 50
-	}
-	if limit > 200 {
-		limit = 200
-	}
+	limit = bounds.NewPage(limit, 0).Limit()
 
 	rows, err := m.chatRepo.GetMessagesBefore(ctx, roomID, userID, before, limit)
 	if err != nil {
 		return nil, fmt.Errorf("get messages before: %w", err)
+	}
+
+	return &dto.ChatMessageListResponse{
+		Messages: m.hydrateMessageRows(ctx, userID, rows),
+		Total:    -1,
+		Limit:    limit,
+	}, nil
+}
+
+func (m *messagesService) ListRoomAttachments(ctx context.Context, userID, roomID uuid.UUID, kind repository.AttachmentKind, before string, limit int) (*dto.ChatMessageListResponse, error) {
+	if err := m.assertRoomMember(ctx, roomID, userID); err != nil {
+		return nil, err
+	}
+
+	limit = bounds.NewPage(limit, 0).Limit()
+
+	rows, err := m.chatRepo.ListRoomAttachments(ctx, roomID, userID, kind, before, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list room attachments: %w", err)
 	}
 
 	return &dto.ChatMessageListResponse{
@@ -145,17 +152,13 @@ func (m *messagesService) SendMessage(ctx context.Context, senderID, roomID uuid
 		return nil, ErrMissingFields
 	}
 	if req.Body != "" {
-		if err := m.filterTexts(ctx, req.Body); err != nil {
+		if err := m.contentFilter.Check(ctx, req.Body); err != nil {
 			return nil, err
 		}
 	}
 
-	isMember, err := m.chatRepo.IsMember(ctx, roomID, senderID)
-	if err != nil {
-		return nil, fmt.Errorf("check membership: %w", err)
-	}
-	if !isMember {
-		return nil, ErrNotMember
+	if err := m.assertRoomMember(ctx, roomID, senderID); err != nil {
+		return nil, err
 	}
 
 	if err := m.ensureLockAllowsRoom(ctx, senderID, roomID); err != nil {
@@ -213,9 +216,9 @@ func (m *messagesService) SendMessage(ctx context.Context, senderID, roomID uuid
 		if perr == nil && parent != nil && parent.RoomID == roomID {
 			replyToID = req.ReplyToID
 			replyToAuthor = parent.SenderID
-			preview := parent.Body
-			if len(preview) > 140 {
-				preview = preview[:140] + "..."
+			preview := text.ClampRunes(parent.Body, 140)
+			if len(preview) != len(parent.Body) {
+				preview += "..."
 			}
 			replyToPreview = &dto.ChatMessageReplyPreview{
 				ID:          parent.ID,
@@ -414,6 +417,7 @@ func (m *messagesService) dispatchPostSendSideEffects(
 
 		_, isMentioned := mentionedIDs[memberID]
 		isReplyTarget := replyToAuthor != uuid.Nil && memberID == replyToAuthor
+		muted, _ := m.chatRepo.IsMuted(ctx, roomID, memberID)
 
 		switch {
 		case isMentioned:
@@ -425,15 +429,16 @@ func (m *messagesService) dispatchPostSendSideEffects(
 				ReferenceType: msgRef,
 			})
 		case isReplyTarget:
-			_ = m.notifSvc.Notify(ctx, dto.NotifyParams{
-				RecipientID:   memberID,
-				ActorID:       senderID,
-				Type:          dto.NotifChatReply,
-				ReferenceID:   roomID,
-				ReferenceType: msgRef,
-			})
+			if !muted {
+				_ = m.notifSvc.Notify(ctx, dto.NotifyParams{
+					RecipientID:   memberID,
+					ActorID:       senderID,
+					Type:          dto.NotifChatReply,
+					ReferenceID:   roomID,
+					ReferenceType: msgRef,
+				})
+			}
 		default:
-			muted, _ := m.chatRepo.IsMuted(ctx, roomID, memberID)
 			if !muted {
 				_ = m.notifSvc.Notify(ctx, dto.NotifyParams{
 					RecipientID:   memberID,
@@ -446,7 +451,7 @@ func (m *messagesService) dispatchPostSendSideEffects(
 			}
 		}
 
-		if !caps.countsTowardsUnread {
+		if !caps.countsTowardsUnread || muted {
 			continue
 		}
 
@@ -519,12 +524,8 @@ func (m *messagesService) GetUnreadCount(ctx context.Context, userID uuid.UUID) 
 }
 
 func (m *messagesService) MarkRead(ctx context.Context, roomID, userID uuid.UUID) error {
-	isMember, err := m.chatRepo.IsMember(ctx, roomID, userID)
-	if err != nil {
-		return fmt.Errorf("check membership: %w", err)
-	}
-	if !isMember {
-		return ErrNotMember
+	if err := m.assertRoomMember(ctx, roomID, userID); err != nil {
+		return err
 	}
 
 	if err := m.chatRepo.MarkRoomRead(ctx, roomID, userID); err != nil {
@@ -708,7 +709,7 @@ func (m *messagesService) EditMessage(ctx context.Context, messageID, actorID uu
 	if body == "" {
 		return nil, ErrMissingFields
 	}
-	if err := m.filterTexts(ctx, body); err != nil {
+	if err := m.contentFilter.Check(ctx, body); err != nil {
 		return nil, err
 	}
 
@@ -726,12 +727,8 @@ func (m *messagesService) EditMessage(ctx context.Context, messageID, actorID uu
 		return nil, ErrMessageEditPermission
 	}
 
-	isMember, err := m.chatRepo.IsMember(ctx, msg.RoomID, actorID)
-	if err != nil {
-		return nil, fmt.Errorf("check membership: %w", err)
-	}
-	if !isMember {
-		return nil, ErrNotMember
+	if err := m.assertRoomMember(ctx, msg.RoomID, actorID); err != nil {
+		return nil, err
 	}
 
 	if err := m.checkSenderTimeout(ctx, msg.RoomID, actorID); err != nil {

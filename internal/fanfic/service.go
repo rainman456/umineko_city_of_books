@@ -6,6 +6,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"umineko_city_of_books/internal/authz"
 	"umineko_city_of_books/internal/block"
@@ -23,6 +24,7 @@ import (
 	"umineko_city_of_books/internal/repository/model"
 	"umineko_city_of_books/internal/role"
 	"umineko_city_of_books/internal/settings"
+	"umineko_city_of_books/internal/text"
 	"umineko_city_of_books/internal/upload"
 	"umineko_city_of_books/internal/utils"
 
@@ -30,8 +32,9 @@ import (
 )
 
 const (
-	defaultSeries   = "Umineko"
-	defaultLanguage = "English"
+	defaultSeries     = "Umineko"
+	defaultLanguage   = "English"
+	maxFanficTagRunes = 30
 )
 
 type (
@@ -121,13 +124,6 @@ func NewService(
 	}
 }
 
-func (s *service) filterTexts(ctx context.Context, texts ...string) error {
-	if s.contentFilter == nil {
-		return nil
-	}
-	return s.contentFilter.Check(ctx, texts...)
-}
-
 func (s *service) writeAudit(ctx context.Context, entry repository.NewAuditEntry) {
 	if err := s.auditRepo.Create(ctx, entry); err != nil {
 		logger.Ctx(ctx).Error().Err(err).Str("action", string(entry.Action)).Msg("failed to write audit log")
@@ -172,7 +168,7 @@ func validateFanficFields(genres, rawTags []string, rawRating, rawSeries, rawLan
 		return fanficFields{}, ErrTooManyTags
 	}
 	for _, t := range tags {
-		if len(t) > 30 {
+		if utf8.RuneCountInString(t) > maxFanficTagRunes {
 			return fanficFields{}, ErrTagTooLong
 		}
 	}
@@ -254,7 +250,7 @@ func (s *service) CreateFanfic(ctx context.Context, userID uuid.UUID, req dto.Cr
 	if title == "" {
 		return uuid.Nil, ErrEmptyTitle
 	}
-	if err := s.filterTexts(ctx, title, req.Summary, req.Body); err != nil {
+	if err := s.contentFilter.Check(ctx, title, req.Summary, req.Body); err != nil {
 		return uuid.Nil, err
 	}
 
@@ -386,7 +382,7 @@ func (s *service) UpdateFanfic(ctx context.Context, id, userID uuid.UUID, req dt
 	if asAdmin && !s.authz.Can(ctx, userID, authz.PermEditAnyTheory) {
 		return ErrNotAuthor
 	}
-	if err := s.filterTexts(ctx, req.Title, req.Summary); err != nil {
+	if err := s.contentFilter.Check(ctx, req.Title, req.Summary); err != nil {
 		return err
 	}
 
@@ -504,8 +500,8 @@ func (s *service) buildFanficList(ctx context.Context, rows []model.FanficRow, t
 	fanfics := make([]dto.FanficResponse, len(rows))
 	for i, r := range rows {
 		resp := r.ToResponse(genresMap[r.ID], tagsMap[r.ID], charactersMap[r.ID])
-		if len(resp.Summary) > 200 {
-			resp.Summary = resp.Summary[:200] + "..."
+		if clipped := text.ClampRunes(resp.Summary, 200); len(clipped) != len(resp.Summary) {
+			resp.Summary = clipped + "..."
 		}
 		fanfics[i] = resp
 	}
@@ -576,7 +572,7 @@ func (s *service) CreateChapter(ctx context.Context, fanficID, userID uuid.UUID,
 	if authorID != userID {
 		return uuid.Nil, ErrNotAuthor
 	}
-	if err := s.filterTexts(ctx, req.Title, req.Body); err != nil {
+	if err := s.contentFilter.Check(ctx, req.Title, req.Body); err != nil {
 		return uuid.Nil, err
 	}
 
@@ -658,7 +654,7 @@ func (s *service) UpdateChapter(ctx context.Context, chapterID, userID uuid.UUID
 	if asAdmin && !s.authz.Can(ctx, userID, authz.PermEditAnyTheory) {
 		return ErrNotAuthor
 	}
-	if err := s.filterTexts(ctx, req.Title, req.Body); err != nil {
+	if err := s.contentFilter.Check(ctx, req.Title, req.Body); err != nil {
 		return err
 	}
 
@@ -786,7 +782,7 @@ func (s *service) CreateComment(ctx context.Context, fanficID, userID uuid.UUID,
 	if body == "" {
 		return uuid.Nil, ErrEmptyBody
 	}
-	if err := s.filterTexts(ctx, body); err != nil {
+	if err := s.contentFilter.Check(ctx, body); err != nil {
 		return uuid.Nil, err
 	}
 
@@ -856,7 +852,7 @@ func (s *service) UpdateComment(ctx context.Context, id, userID uuid.UUID, req d
 	if body == "" {
 		return ErrEmptyBody
 	}
-	if err := s.filterTexts(ctx, body); err != nil {
+	if err := s.contentFilter.Check(ctx, body); err != nil {
 		return err
 	}
 

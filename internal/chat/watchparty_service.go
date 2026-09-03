@@ -14,6 +14,7 @@ import (
 	"umineko_city_of_books/internal/hyperbeam"
 	"umineko_city_of_books/internal/logger"
 	"umineko_city_of_books/internal/repository"
+	"umineko_city_of_books/internal/text"
 	"umineko_city_of_books/internal/ws"
 
 	"github.com/google/uuid"
@@ -77,7 +78,7 @@ func (s *watchPartyService) StartWatchParty(ctx context.Context, roomID, actorID
 		return nil, ErrWatchPartyDisabled
 	}
 
-	if err := s.assertActiveRoomMember(ctx, roomID, actorID); err != nil {
+	if err := s.assertRoomMember(ctx, roomID, actorID); err != nil {
 		return nil, err
 	}
 
@@ -92,10 +93,7 @@ func (s *watchPartyService) StartWatchParty(ctx context.Context, roomID, actorID
 		return nil, ErrWatchPartyWrongRoomType
 	}
 
-	trimmedTitle := strings.TrimSpace(title)
-	if len(trimmedTitle) > maxWatchPartyTitleLen {
-		trimmedTitle = trimmedTitle[:maxWatchPartyTitleLen]
-	}
+	trimmedTitle := text.ClampRunes(strings.TrimSpace(title), maxWatchPartyTitleLen)
 
 	sessionRow := repository.ChatWatchPartySessionRow{
 		RoomID:       roomID,
@@ -196,7 +194,7 @@ func (s *watchPartyService) StartWatchParty(ctx context.Context, roomID, actorID
 }
 
 func (s *watchPartyService) JoinWatchParty(ctx context.Context, roomID, sessionID, actorID uuid.UUID) (*dto.JoinWatchPartyResponse, error) {
-	if err := s.assertActiveRoomMember(ctx, roomID, actorID); err != nil {
+	if err := s.assertRoomMember(ctx, roomID, actorID); err != nil {
 		return nil, err
 	}
 
@@ -311,7 +309,7 @@ func (s *watchPartyService) KickWatchPartyParticipant(ctx context.Context, roomI
 		return ErrWatchPartyCannotKickSelf
 	}
 
-	if err := s.assertActiveRoomMember(ctx, roomID, callerID); err != nil {
+	if err := s.assertRoomMember(ctx, roomID, callerID); err != nil {
 		return err
 	}
 
@@ -433,7 +431,7 @@ func (s *watchPartyService) GrantWatchPartyControl(ctx context.Context, roomID, 
 		return ErrWatchPartyDisabled
 	}
 
-	if err := s.assertActiveRoomMember(ctx, roomID, callerID); err != nil {
+	if err := s.assertRoomMember(ctx, roomID, callerID); err != nil {
 		return err
 	}
 
@@ -563,7 +561,7 @@ func (s *watchPartyService) transferControlTo(ctx context.Context, roomID uuid.U
 
 func (s *watchPartyService) EndWatchParty(ctx context.Context, roomID, sessionID, actorID uuid.UUID, reason string) error {
 	if actorID != uuid.Nil {
-		if err := s.assertActiveRoomMember(ctx, roomID, actorID); err != nil {
+		if err := s.assertRoomMember(ctx, roomID, actorID); err != nil {
 			return err
 		}
 	}
@@ -625,7 +623,7 @@ func (s *watchPartyService) endWatchParty(ctx context.Context, roomID, sessionID
 }
 
 func (s *watchPartyService) IdentifyWatchPartyParticipant(ctx context.Context, roomID, sessionID, userID uuid.UUID, identifier string) error {
-	if err := s.assertActiveRoomMember(ctx, roomID, userID); err != nil {
+	if err := s.assertRoomMember(ctx, roomID, userID); err != nil {
 		return err
 	}
 
@@ -655,7 +653,7 @@ func (s *watchPartyService) IdentifyWatchPartyParticipant(ctx context.Context, r
 }
 
 func (s *watchPartyService) ListWatchParties(ctx context.Context, roomID, viewerID uuid.UUID) (*dto.WatchPartyListResponse, error) {
-	if err := s.assertActiveRoomMember(ctx, roomID, viewerID); err != nil {
+	if err := s.assertRoomMember(ctx, roomID, viewerID); err != nil {
 		return nil, err
 	}
 	rows, err := s.watchPartyRepo.ListActiveByRoom(ctx, roomID)
@@ -688,7 +686,7 @@ func (s *watchPartyService) ListWatchParties(ctx context.Context, roomID, viewer
 }
 
 func (s *watchPartyService) MintSessionVoiceToken(ctx context.Context, roomID, sessionID, userID uuid.UUID) (token, url string, err error) {
-	if err = s.assertActiveRoomMember(ctx, roomID, userID); err != nil {
+	if err = s.assertRoomMember(ctx, roomID, userID); err != nil {
 		return "", "", err
 	}
 
@@ -731,7 +729,7 @@ func (s *watchPartyService) ForceMuteSessionVoice(ctx context.Context, roomID, s
 		return ErrVoiceDisabled
 	}
 
-	if err := s.assertActiveRoomMember(ctx, roomID, actorID); err != nil {
+	if err := s.assertRoomMember(ctx, roomID, actorID); err != nil {
 		return err
 	}
 
@@ -849,17 +847,6 @@ func (s *watchPartyService) admitToWatchPartyRoom(ctx context.Context, sessionID
 	}
 
 	s.hub.JoinRoom(sessionID, userID)
-}
-
-func (s *watchPartyService) assertActiveRoomMember(ctx context.Context, roomID, userID uuid.UUID) error {
-	isMember, err := s.chatRepo.IsMember(ctx, roomID, userID)
-	if err != nil {
-		return fmt.Errorf("check membership: %w", err)
-	}
-	if !isMember {
-		return ErrNotMember
-	}
-	return nil
 }
 
 func (s *watchPartyService) loadActiveSession(ctx context.Context, roomID, sessionID uuid.UUID) (*repository.ChatWatchPartySessionRow, error) {

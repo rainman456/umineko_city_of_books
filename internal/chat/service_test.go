@@ -10,6 +10,7 @@ import (
 
 	"umineko_city_of_books/internal/authz"
 	"umineko_city_of_books/internal/block"
+	"umineko_city_of_books/internal/bounds"
 	"umineko_city_of_books/internal/config"
 	"umineko_city_of_books/internal/contentfilter"
 	"umineko_city_of_books/internal/dto"
@@ -2232,7 +2233,7 @@ func TestGetMessagesBefore_DefaultsApplied(t *testing.T) {
 	userID := uuid.New()
 	roomID := uuid.New()
 	m.chatRepo.EXPECT().IsMember(mock.Anything, roomID, userID).Return(true, nil)
-	m.chatRepo.EXPECT().GetMessagesBefore(mock.Anything, roomID, mock.Anything, "x", 50).Return(nil, nil)
+	m.chatRepo.EXPECT().GetMessagesBefore(mock.Anything, roomID, mock.Anything, "x", bounds.DefaultLimit).Return(nil, nil)
 	m.chatRepo.EXPECT().GetMessageMediaBatch(mock.Anything, []uuid.UUID{}).Return(nil, nil)
 	m.chatRepo.EXPECT().GetReactionsBatch(mock.Anything, []uuid.UUID{}, userID).Return(nil, nil)
 	m.vanityRoleRepo.EXPECT().GetRolesForUsersBatch(mock.Anything, mock.Anything).Return(nil, nil)
@@ -2242,7 +2243,7 @@ func TestGetMessagesBefore_DefaultsApplied(t *testing.T) {
 
 	// then
 	require.NoError(t, err)
-	assert.Equal(t, 50, got.Limit)
+	assert.Equal(t, bounds.DefaultLimit, got.Limit)
 }
 
 func TestGetMessagesBefore_LimitClamped(t *testing.T) {
@@ -2251,7 +2252,7 @@ func TestGetMessagesBefore_LimitClamped(t *testing.T) {
 	userID := uuid.New()
 	roomID := uuid.New()
 	m.chatRepo.EXPECT().IsMember(mock.Anything, roomID, userID).Return(true, nil)
-	m.chatRepo.EXPECT().GetMessagesBefore(mock.Anything, roomID, mock.Anything, "x", 200).Return(nil, nil)
+	m.chatRepo.EXPECT().GetMessagesBefore(mock.Anything, roomID, mock.Anything, "x", bounds.MaxLimit).Return(nil, nil)
 	m.chatRepo.EXPECT().GetMessageMediaBatch(mock.Anything, []uuid.UUID{}).Return(nil, nil)
 	m.chatRepo.EXPECT().GetReactionsBatch(mock.Anything, []uuid.UUID{}, userID).Return(nil, nil)
 	m.vanityRoleRepo.EXPECT().GetRolesForUsersBatch(mock.Anything, mock.Anything).Return(nil, nil)
@@ -2261,7 +2262,7 @@ func TestGetMessagesBefore_LimitClamped(t *testing.T) {
 
 	// then
 	require.NoError(t, err)
-	assert.Equal(t, 200, got.Limit)
+	assert.Equal(t, bounds.MaxLimit, got.Limit)
 }
 
 func TestSendMessage_EmptyBody(t *testing.T) {
@@ -2462,7 +2463,6 @@ func TestSendMessage_DMMutedSkipsNotification(t *testing.T) {
 	m.vanityRoleRepo.EXPECT().GetRolesForUser(mock.Anything, senderID).Return(nil, nil)
 	m.chatRepo.EXPECT().GetRoomSendContext(mock.Anything, roomID).Return(&repository.ChatRoomSendContext{Type: "dm", LastMessageAt: ongoingThread()}, nil)
 	m.chatRepo.EXPECT().IsMuted(mock.Anything, roomID, recipientID).Return(true, nil)
-	m.chatRepo.EXPECT().CountUnreadRoomsForUser(mock.Anything, recipientID).Return(1, nil)
 
 	// when
 	_, err := svc.SendMessage(context.Background(), senderID, roomID, dto.SendMessageRequest{Body: "hi"}, nil)
@@ -2471,6 +2471,7 @@ func TestSendMessage_DMMutedSkipsNotification(t *testing.T) {
 	// then
 	require.NoError(t, err)
 	m.notifSvc.AssertNotCalled(t, "Notify", mock.Anything, mock.MatchedBy(func(p dto.NotifyParams) bool { return p.Type == dto.NotifChatMessage }))
+	m.chatRepo.AssertNotCalled(t, "CountUnreadRoomsForUser", mock.Anything, recipientID)
 }
 
 func TestSendMessage_DMSuppressedWhileTheRecipientIsViewingTheRoom(t *testing.T) {
@@ -2585,6 +2586,8 @@ func TestSendMessage_GroupWithMentionAndReply(t *testing.T) {
 	m.vanityRoleRepo.EXPECT().GetRolesForUser(mock.Anything, senderID).Return(nil, nil)
 	m.chatRepo.EXPECT().GetRoomSendContext(mock.Anything, roomID).Return(&repository.ChatRoomSendContext{Type: "group", Name: "G", CreatedBy: senderID}, nil)
 	m.userRepo.EXPECT().GetByUsernames(mock.Anything, []string{"bob"}).Return([]model.User{{ID: mentionedID, Username: "bob"}}, nil)
+	m.chatRepo.EXPECT().IsMuted(mock.Anything, roomID, mentionedID).Return(false, nil)
+	m.chatRepo.EXPECT().IsMuted(mock.Anything, roomID, replyAuthorID).Return(false, nil)
 	m.notifSvc.EXPECT().Notify(mock.Anything, mock.MatchedBy(func(p dto.NotifyParams) bool { return p.Type == dto.NotifChatMention && p.RecipientID == mentionedID })).Return(nil)
 	m.notifSvc.EXPECT().Notify(mock.Anything, mock.MatchedBy(func(p dto.NotifyParams) bool { return p.Type == dto.NotifChatReply && p.RecipientID == replyAuthorID })).Return(nil)
 
@@ -2722,12 +2725,17 @@ func TestSendMessage_NotificationLadder(t *testing.T) {
 			wantType:   dto.NotifChatMention,
 		},
 		{
-			name:       "a dm reply notifies as a reply and pierces the mute",
+			name:       "a dm reply notifies as a reply",
 			roomType:   dto.RoomTypeDM,
 			reply:      true,
-			muted:      true,
 			wantNotify: true,
 			wantType:   dto.NotifChatReply,
+		},
+		{
+			name:     "a muted dm reply notifies nothing",
+			roomType: dto.RoomTypeDM,
+			reply:    true,
+			muted:    true,
 		},
 		{
 			name:       "a plain dm notifies as a direct message",
@@ -2749,12 +2757,17 @@ func TestSendMessage_NotificationLadder(t *testing.T) {
 			wantType:   dto.NotifChatMention,
 		},
 		{
-			name:       "a room reply notifies as a reply and pierces the mute",
+			name:       "a room reply notifies as a reply",
 			roomType:   dto.RoomTypeGroup,
 			reply:      true,
-			muted:      true,
 			wantNotify: true,
 			wantType:   dto.NotifChatReply,
+		},
+		{
+			name:     "a muted room reply notifies nothing",
+			roomType: dto.RoomTypeGroup,
+			reply:    true,
+			muted:    true,
 		},
 		{
 			name:        "a plain room message notifies as a room message",
@@ -2809,8 +2822,8 @@ func TestSendMessage_NotificationLadder(t *testing.T) {
 				Return(&repository.ChatMessageRow{ID: msgID}, nil)
 			m.chatRepo.EXPECT().GetRoomMembersDetailed(mock.Anything, roomID).Return(nil, nil)
 			m.vanityRoleRepo.EXPECT().GetRolesForUser(mock.Anything, senderID).Return(nil, nil)
-			m.chatRepo.EXPECT().IsMuted(mock.Anything, roomID, recipientID).Return(tc.muted, nil).Maybe()
-			if tc.roomType == dto.RoomTypeDM {
+			m.chatRepo.EXPECT().IsMuted(mock.Anything, roomID, recipientID).Return(tc.muted, nil)
+			if tc.roomType == dto.RoomTypeDM && !tc.muted {
 				m.chatRepo.EXPECT().CountUnreadRoomsForUser(mock.Anything, recipientID).Return(1, nil)
 			}
 
@@ -2820,7 +2833,7 @@ func TestSendMessage_NotificationLadder(t *testing.T) {
 
 			// then
 			require.NoError(t, err)
-			if tc.roomType != dto.RoomTypeDM {
+			if tc.roomType != dto.RoomTypeDM || tc.muted {
 				m.chatRepo.AssertNotCalled(t, "CountUnreadRoomsForUser", mock.Anything, recipientID)
 			}
 
@@ -2864,6 +2877,7 @@ func TestSendMessage_DMMentionStillCarriesTheBotAudience(t *testing.T) {
 		Return(&repository.ChatMessageRow{ID: uuid.New()}, nil)
 	m.chatRepo.EXPECT().GetRoomMembersDetailed(mock.Anything, roomID).Return(nil, nil)
 	m.vanityRoleRepo.EXPECT().GetRolesForUser(mock.Anything, senderID).Return(nil, nil)
+	m.chatRepo.EXPECT().IsMuted(mock.Anything, roomID, botID).Return(false, nil)
 	m.chatRepo.EXPECT().CountUnreadRoomsForUser(mock.Anything, botID).Return(1, nil)
 
 	// when
@@ -3725,7 +3739,7 @@ func TestListPinnedMessages_HappyPath(t *testing.T) {
 	viewerID := uuid.New()
 	msgID := uuid.New()
 	m.chatRepo.EXPECT().IsMember(mock.Anything, roomID, viewerID).Return(true, nil)
-	m.chatRepo.EXPECT().ListPinnedMessages(mock.Anything, roomID).Return([]repository.ChatMessageRow{
+	m.chatRepo.EXPECT().ListPinnedMessages(mock.Anything, roomID, viewerID).Return([]repository.ChatMessageRow{
 		{ID: msgID, RoomID: roomID, SenderID: uuid.New(), Body: "pinned"},
 	}, nil)
 	m.chatRepo.EXPECT().GetMessageMediaBatch(mock.Anything, []uuid.UUID{msgID}).Return(nil, nil)
@@ -3776,7 +3790,7 @@ func TestListPinnedMessages_RepoError(t *testing.T) {
 	roomID := uuid.New()
 	viewerID := uuid.New()
 	m.chatRepo.EXPECT().IsMember(mock.Anything, roomID, viewerID).Return(true, nil)
-	m.chatRepo.EXPECT().ListPinnedMessages(mock.Anything, roomID).Return(nil, errors.New("db"))
+	m.chatRepo.EXPECT().ListPinnedMessages(mock.Anything, roomID, viewerID).Return(nil, errors.New("db"))
 
 	// when
 	_, err := svc.ListPinnedMessages(context.Background(), roomID, viewerID)

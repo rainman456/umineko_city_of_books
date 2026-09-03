@@ -8,11 +8,13 @@ import (
 	"strings"
 	"time"
 
+	"umineko_city_of_books/internal/bounds"
 	"umineko_city_of_books/internal/config"
 	"umineko_city_of_books/internal/dto"
 	"umineko_city_of_books/internal/logger"
 	"umineko_city_of_books/internal/og"
 	"umineko_city_of_books/internal/repository"
+	"umineko_city_of_books/internal/text"
 	"umineko_city_of_books/internal/ws"
 
 	"github.com/google/uuid"
@@ -229,15 +231,9 @@ func roomUpdateAuditDetails(row *repository.ChatRoomRow, name, description strin
 }
 
 func (r *roomsService) ListPublicRooms(ctx context.Context, search string, isRPOnly bool, tag string, viewerID uuid.UUID, includeArchived bool, limit, offset int) (*dto.ChatRoomListResponse, error) {
-	if limit <= 0 {
-		limit = 20
-	}
-	if limit > 100 {
-		limit = 100
-	}
-	if offset < 0 {
-		offset = 0
-	}
+	page := bounds.NewPage(limit, offset)
+	limit = page.Limit()
+	offset = page.Offset()
 
 	blockedIDs, _ := r.blockSvc.GetBlockedIDs(ctx, viewerID)
 	tag = strings.ToLower(strings.TrimSpace(tag))
@@ -267,15 +263,9 @@ func (r *roomsService) ListPublicRooms(ctx context.Context, search string, isRPO
 }
 
 func (r *roomsService) ListUserGroupRooms(ctx context.Context, userID uuid.UUID, search string, isRPOnly bool, tag, roleFilter string, includeArchived bool, limit, offset int) (*dto.ChatRoomListResponse, error) {
-	if limit <= 0 {
-		limit = 20
-	}
-	if limit > 100 {
-		limit = 100
-	}
-	if offset < 0 {
-		offset = 0
-	}
+	page := bounds.NewPage(limit, offset)
+	limit = page.Limit()
+	offset = page.Offset()
 	if roleFilter != "host" && roleFilter != "member" {
 		roleFilter = ""
 	}
@@ -294,12 +284,8 @@ func (r *roomsService) ListUserGroupRooms(ctx context.Context, userID uuid.UUID,
 }
 
 func (r *roomsService) SetRoomMuted(ctx context.Context, roomID, userID uuid.UUID, muted bool) error {
-	isMember, err := r.chatRepo.IsMember(ctx, roomID, userID)
-	if err != nil {
-		return fmt.Errorf("check membership: %w", err)
-	}
-	if !isMember {
-		return ErrNotMember
+	if err := r.assertRoomMember(ctx, roomID, userID); err != nil {
+		return err
 	}
 
 	if err := r.chatRepo.SetMuted(ctx, roomID, userID, muted); err != nil {
@@ -633,16 +619,12 @@ func (r *roomsService) buildRoomResponse(ctx context.Context, roomID, viewerID u
 }
 
 func (r *roomsService) SetRoomNickname(ctx context.Context, roomID, userID uuid.UUID, nickname string) (*dto.ChatRoomMemberResponse, error) {
-	if err := r.filterTexts(ctx, nickname); err != nil {
+	if err := r.contentFilter.Check(ctx, nickname); err != nil {
 		return nil, err
 	}
 
-	isMember, err := r.chatRepo.IsMember(ctx, roomID, userID)
-	if err != nil {
-		return nil, fmt.Errorf("check membership: %w", err)
-	}
-	if !isMember {
-		return nil, ErrNotMember
+	if err := r.assertRoomMember(ctx, roomID, userID); err != nil {
+		return nil, err
 	}
 
 	locked, err := r.effectiveLocked(ctx, roomID, userID)
@@ -653,10 +635,7 @@ func (r *roomsService) SetRoomNickname(ctx context.Context, roomID, userID uuid.
 		return nil, ErrNicknameLocked
 	}
 
-	nickname = strings.TrimSpace(nickname)
-	if len(nickname) > 32 {
-		nickname = nickname[:32]
-	}
+	nickname = text.ClampRunes(strings.TrimSpace(nickname), 32)
 
 	if err := r.chatRepo.SetMemberNickname(ctx, roomID, userID, nickname); err != nil {
 		return nil, fmt.Errorf("set member nickname: %w", err)
@@ -675,12 +654,8 @@ func (r *roomsService) SetRoomNickname(ctx context.Context, roomID, userID uuid.
 }
 
 func (r *roomsService) SetRoomAvatar(ctx context.Context, roomID, userID uuid.UUID, contentType string, fileSize int64, reader io.Reader) (*dto.ChatRoomMemberResponse, error) {
-	isMember, err := r.chatRepo.IsMember(ctx, roomID, userID)
-	if err != nil {
-		return nil, fmt.Errorf("check membership: %w", err)
-	}
-	if !isMember {
-		return nil, ErrNotMember
+	if err := r.assertRoomMember(ctx, roomID, userID); err != nil {
+		return nil, err
 	}
 
 	locked, err := r.effectiveLocked(ctx, roomID, userID)
@@ -706,12 +681,8 @@ func (r *roomsService) SetRoomAvatar(ctx context.Context, roomID, userID uuid.UU
 }
 
 func (r *roomsService) ClearRoomAvatar(ctx context.Context, roomID, userID uuid.UUID) (*dto.ChatRoomMemberResponse, error) {
-	isMember, err := r.chatRepo.IsMember(ctx, roomID, userID)
-	if err != nil {
-		return nil, fmt.Errorf("check membership: %w", err)
-	}
-	if !isMember {
-		return nil, ErrNotMember
+	if err := r.assertRoomMember(ctx, roomID, userID); err != nil {
+		return nil, err
 	}
 
 	locked, err := r.effectiveLocked(ctx, roomID, userID)

@@ -9,6 +9,7 @@ import (
 	"umineko_city_of_books/internal/config"
 	"umineko_city_of_books/internal/dto"
 	"umineko_city_of_books/internal/repository"
+	"umineko_city_of_books/internal/text"
 	"umineko_city_of_books/internal/ws"
 
 	"github.com/google/uuid"
@@ -276,12 +277,8 @@ func (m *membersService) ClearMemberTimeout(ctx context.Context, roomID, actorID
 }
 
 func (m *membersService) GetMembers(ctx context.Context, viewerID, roomID uuid.UUID) ([]dto.ChatRoomMemberResponse, error) {
-	isMember, err := m.chatRepo.IsMember(ctx, roomID, viewerID)
-	if err != nil {
-		return nil, fmt.Errorf("check membership: %w", err)
-	}
-	if !isMember {
-		return nil, ErrNotMember
+	if err := m.assertRoomMember(ctx, roomID, viewerID); err != nil {
+		return nil, err
 	}
 
 	rows, err := m.chatRepo.GetRoomMembersDetailed(ctx, roomID)
@@ -339,14 +336,11 @@ func (m *membersService) SetMemberNicknameAsMod(ctx context.Context, roomID, act
 		return nil, err
 	}
 
-	if err := m.filterTexts(ctx, nickname); err != nil {
+	if err := m.contentFilter.Check(ctx, nickname); err != nil {
 		return nil, err
 	}
 
-	nickname = strings.TrimSpace(nickname)
-	if len(nickname) > 32 {
-		nickname = nickname[:32]
-	}
+	nickname = text.ClampRunes(strings.TrimSpace(nickname), 32)
 
 	locked := nickname != ""
 	if err := m.chatRepo.SetMemberNicknameWithLock(ctx, roomID, targetID, nickname, locked); err != nil {

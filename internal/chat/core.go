@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"umineko_city_of_books/internal/authz"
 	"umineko_city_of_books/internal/block"
@@ -38,6 +39,8 @@ const (
 
 	maxRoomNameLength        = 80
 	maxRoomDescriptionLength = 500
+	maxEmojiRunes            = 16
+	maxTagRunes              = 30
 )
 
 var (
@@ -244,13 +247,6 @@ func (c *core) clearWatchPartyParticipation(ctx context.Context, roomID, userID 
 	}
 }
 
-func (c *core) filterTexts(ctx context.Context, texts ...string) error {
-	if c.contentFilter == nil {
-		return nil
-	}
-	return c.contentFilter.Check(ctx, texts...)
-}
-
 func resolveSenderName(nickname, displayName, username string) string {
 	if strings.TrimSpace(nickname) != "" {
 		return nickname
@@ -365,7 +361,7 @@ func (c *core) normaliseRoomInput(ctx context.Context, rawName, rawDescription s
 		return "", "", nil, ErrMissingFields
 	}
 
-	if err := c.filterTexts(ctx, name, rawDescription); err != nil {
+	if err := c.contentFilter.Check(ctx, name, rawDescription); err != nil {
 		return "", "", nil, err
 	}
 
@@ -460,7 +456,7 @@ func (c *core) rowToResponse(row repository.ChatRoomRow) dto.ChatRoomResponse {
 		CreatedAt:     row.CreatedAt,
 		LastMessageAt: nullStr(row.LastMessageAt),
 		ArchivedAt:    nullStr(row.ArchivedAt),
-		Unread:        isUnread(row.LastMessageAt, row.LastReadAt),
+		Unread:        !row.ViewerMuted && isUnread(row.LastMessageAt, row.LastReadAt),
 	}
 }
 
@@ -582,9 +578,9 @@ func (c *core) messageRowToResponse(row repository.ChatMessageRow, media []dto.P
 		Reactions:             toDTOReactions(reactions),
 	}
 	if row.ReplyToID != nil && row.ReplyToSenderID != nil && row.ReplyToSenderName != nil && row.ReplyToBody != nil {
-		preview := *row.ReplyToBody
-		if len(preview) > 140 {
-			preview = preview[:140] + "..."
+		preview := text.ClampRunes(*row.ReplyToBody, 140)
+		if len(preview) != len(*row.ReplyToBody) {
+			preview += "..."
 		}
 		resp.ReplyTo = &dto.ChatMessageReplyPreview{
 			ID:          *row.ReplyToID,
@@ -637,6 +633,18 @@ func (c *core) effectiveLocked(ctx context.Context, roomID, userID uuid.UUID) (b
 	return locked, nil
 }
 
+func (c *core) assertRoomMember(ctx context.Context, roomID, userID uuid.UUID) error {
+	isMember, err := c.chatRepo.IsMember(ctx, roomID, userID)
+	if err != nil {
+		return fmt.Errorf("check membership: %w", err)
+	}
+	if !isMember {
+		return ErrNotMember
+	}
+
+	return nil
+}
+
 func (c *core) requireSiteMod(ctx context.Context, userID uuid.UUID) error {
 	siteRole, err := c.authzSvc.GetRole(ctx, userID)
 	if err != nil {
@@ -684,7 +692,7 @@ func stringOrEmpty(resp *dto.ChatRoomMemberResponse, get func(*dto.ChatRoomMembe
 }
 
 func validateEmoji(emoji string) error {
-	if emoji == "" || len(emoji) > 16 {
+	if emoji == "" || utf8.RuneCountInString(emoji) > maxEmojiRunes {
 		return ErrInvalidEmoji
 	}
 	return nil
@@ -704,9 +712,7 @@ func sanitizeTags(raw []string) []string {
 		if t == "" {
 			continue
 		}
-		if len(t) > 30 {
-			t = t[:30]
-		}
+		t = text.ClampRunes(t, maxTagRunes)
 		if _, dup := seen[t]; dup {
 			continue
 		}
