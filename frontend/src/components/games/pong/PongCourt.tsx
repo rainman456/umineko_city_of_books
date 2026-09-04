@@ -9,6 +9,7 @@ import {
     PONG_EVENT_HIT_P1,
     PONG_EVENT_SCORE,
     PONG_HALF_TRIP_MAX_MS,
+    PONG_HALF_TRIP_SMOOTH_MS,
     PONG_PADDLE_SMOOTH_MS,
 } from "../../../games/pong/types";
 import type { GameRoom, PongState } from "../../../types/api";
@@ -89,6 +90,7 @@ export function PongCourt({ room, state, mySlot, isSpectator, roundTripMs }: Pon
     const shownPaddleRef = useRef<[number | null, number | null]>([null, null]);
     const lastDrawRef = useRef(0);
     const latencyRef = useRef<number | null>(null);
+    const halfTripRef = useRef(0);
     const lastFiredTRef = useRef(0);
     const flashRef = useRef<[number, number]>([0, 0]);
     const shakeRef = useRef(0);
@@ -191,7 +193,9 @@ export function PongCourt({ room, state, mySlot, isSpectator, roundTripMs }: Pon
             const elapsed = lastDrawRef.current === 0 ? 0 : now - lastDrawRef.current;
             lastDrawRef.current = now;
 
-            const halfTrip = clamp((latencyRef.current ?? 0) / 2, 0, PONG_HALF_TRIP_MAX_MS);
+            const wantedHalfTrip = clamp((latencyRef.current ?? 0) / 2, 0, PONG_HALF_TRIP_MAX_MS);
+            halfTripRef.current = smoothTowards(halfTripRef.current, wantedHalfTrip, elapsed, PONG_HALF_TRIP_SMOOTH_MS);
+            const halfTrip = halfTripRef.current;
 
             const buffer = frames.current;
             const sample = buffer.length > 0 ? sampleAt(buffer, serverNow(buffer, now) + halfTrip, bounds) : null;

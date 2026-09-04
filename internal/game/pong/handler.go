@@ -26,6 +26,8 @@ const (
 	faceX0 = paddleInset + paddleWidth
 	faceX1 = boardWidth - paddleInset - paddleWidth
 
+	crossDistance = faceX1 - faceX0
+
 	paddleMaxSpeed = 1100
 	ballSpeedStart = 900
 	ballSpeedGain  = 1.06
@@ -48,6 +50,11 @@ const (
 	serveDelayMS      = 1200
 	resumeCountdownMS = 3000
 	maxMatchTicks     = 54000
+
+	maxLatencyCompMS = 90
+	minLegScale      = 0.75
+	maxLegScale      = 1.25
+	pingSmoothAlpha  = 0.15
 
 	phaseCountdown = "countdown"
 	phaseServe     = "serve"

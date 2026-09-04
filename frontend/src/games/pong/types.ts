@@ -28,6 +28,7 @@ export const PONG_INPUT_EPSILON = 4;
 export const PONG_EXTRAPOLATE_MAX_MS = 250;
 export const PONG_TARGET_HISTORY_MS = 1000;
 export const PONG_HALF_TRIP_MAX_MS = 250;
+export const PONG_HALF_TRIP_SMOOTH_MS = 250;
 export const PONG_PADDLE_SMOOTH_MS = 30;
 export const PONG_STALE_MS = 600;
 export const PONG_BUFFER = 12;

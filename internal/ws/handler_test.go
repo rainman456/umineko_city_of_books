@@ -136,6 +136,84 @@ func TestParsePing(t *testing.T) {
 	}
 }
 
+func TestBoundReportedRTT(t *testing.T) {
+	tests := []struct {
+		name     string
+		reported int
+		measured int64
+		want     int
+	}{
+		{
+			name:     "an unmeasured client is taken at its word",
+			reported: 400,
+			measured: 0,
+			want:     400,
+		},
+		{
+			name:     "an honest report well inside the measured ceiling is kept",
+			reported: 160,
+			measured: 150,
+			want:     160,
+		},
+		{
+			name:     "jitter above a single measured sample is still allowed through",
+			reported: 300,
+			measured: 150,
+			want:     300,
+		},
+		{
+			name:     "a claim far beyond what the socket observed is clipped",
+			reported: 4000,
+			measured: 40,
+			want:     180,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// given the reported and measured round trips under test
+
+			// when
+			got := boundReportedRTT(tt.reported, tt.measured)
+
+			// then
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestClientRecordPong(t *testing.T) {
+	t.Run("a round trip is not reported until a probe completes", func(t *testing.T) {
+		// given
+		client := NewClient(uuid.New(), nil)
+
+		// when
+		client.RecordPong()
+
+		// then
+		assert.Zero(t, client.MeasuredRTT())
+	})
+
+	t.Run("a spike is believed at once but decays over later probes", func(t *testing.T) {
+		// given
+		client := NewClient(uuid.New(), nil)
+
+		// when
+		client.pingAt.Store(time.Now().Add(-200 * time.Millisecond).UnixNano())
+		client.RecordPong()
+		spike := client.MeasuredRTT()
+
+		client.pingAt.Store(time.Now().UnixNano())
+		client.RecordPong()
+		afterQuiet := client.MeasuredRTT()
+
+		// then
+		assert.GreaterOrEqual(t, spike, int64(200))
+		assert.Less(t, afterQuiet, spike)
+		assert.Positive(t, afterQuiet)
+	})
+}
+
 func TestStillAuthorised(t *testing.T) {
 	// given
 	userID := uuid.New()

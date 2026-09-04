@@ -659,3 +659,134 @@ func TestSim_CountdownServesAfterTheDelay(t *testing.T) {
 	assert.InDelta(t, float64(s.st.ServeVY), s.ballVY, 1e-9)
 	assert.InDelta(t, float64(ballSpeedStart), s.speed, 1e-9)
 }
+
+func TestSim_LatencyScaleEqualisesTheReactionBudget(t *testing.T) {
+	cases := []struct {
+		name  string
+		pings [2]int
+	}{
+		{"a narrow gap", [2]int{30, 60}},
+		{"the gap a fast host sees against a distant guest", [2]int{30, 160}},
+		{"reversed so the distant player serves", [2]int{160, 30}},
+		{"level pings", [2]int{80, 80}},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			// given
+			s := rallySim(t)
+			s.SetPing(0, tt.pings[0])
+			s.SetPing(1, tt.pings[1])
+			s.ballVX = crossDistance
+
+			// when
+			var budget [2]float64
+			for slot := range 2 {
+				crossMS := 1000 / s.latencyScale(slot)
+				budget[slot] = crossMS - float64(tt.pings[slot])
+			}
+
+			// then
+			assert.InDelta(t, budget[0], budget[1], 1e-9)
+		})
+	}
+}
+
+func TestSim_LatencyScaleSlowsTheLegTowardsTheLaggierPlayer(t *testing.T) {
+	// given
+	s := rallySim(t)
+	s.SetPing(0, 30)
+	s.SetPing(1, 160)
+	s.ballVX = crossDistance
+
+	// when
+	toLaggy := s.latencyScale(1)
+	toFast := s.latencyScale(0)
+
+	// then
+	assert.Less(t, toLaggy, 1.0)
+	assert.Greater(t, toFast, 1.0)
+	assert.InDelta(t, 130.0, 1000/toLaggy-1000/toFast, 1e-9)
+}
+
+func TestSim_LatencyScaleStandsAsideWhenItCannotJudge(t *testing.T) {
+	cases := []struct {
+		name      string
+		pings     [2]int
+		connected [2]bool
+	}{
+		{"nothing reported yet", [2]int{0, 0}, [2]bool{true, true}},
+		{"only one side reporting", [2]int{0, 160}, [2]bool{true, true}},
+		{"a player has dropped out", [2]int{30, 160}, [2]bool{true, false}},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			// given
+			s := rallySim(t)
+			s.SetPing(0, tt.pings[0])
+			s.SetPing(1, tt.pings[1])
+			s.connected = tt.connected
+			s.ballVX = crossDistance
+
+			// when
+			scale := s.latencyScale(1)
+
+			// then
+			assert.InDelta(t, 1.0, scale, 1e-9)
+		})
+	}
+}
+
+func TestSim_LatencyCompensationIsCappedForAnExtremeGap(t *testing.T) {
+	// given
+	s := rallySim(t)
+	s.SetPing(0, 20)
+	s.SetPing(1, 900)
+	s.ballVX = crossDistance
+
+	// when
+	scale := s.latencyScale(1)
+
+	// then
+	assert.InDelta(t, 1000+maxLatencyCompMS, 1000/scale, 1e-9)
+}
+
+func TestSim_SetPingSeedsThenEasesTowardsTheReportedValue(t *testing.T) {
+	// given
+	s := rallySim(t)
+
+	// when
+	s.SetPing(0, 100)
+	seeded := s.pingEMA[0]
+	s.SetPing(0, 200)
+
+	// then
+	assert.InDelta(t, 100, seeded, 1e-9)
+	assert.InDelta(t, 100+100*pingSmoothAlpha, s.pingEMA[0], 1e-9)
+	assert.Equal(t, 200, s.ping[0])
+}
+
+func TestSim_LatencyScaleLeavesTheSpeedRampAlone(t *testing.T) {
+	// given
+	s := rallySim(t)
+	s.SetPing(0, 30)
+	s.SetPing(1, 160)
+	s.speed = ballSpeedStart
+	s.ballX = faceX0 + ballRadius + 5
+	s.ballY = boardHeight / 2
+	s.ballVX = -ballSpeedStart
+	s.ballVY = 0
+	s.paddleY[0] = boardHeight / 2
+	s.sweptFrom[0] = boardHeight / 2
+	s.target[0] = boardHeight / 2
+
+	// when
+	s.Tick(tickInterval)
+
+	// then
+	assert.Equal(t, 1, s.st.Hits[0])
+	assert.InDelta(t, ballSpeedStart*ballSpeedGain, s.speed, 1e-9)
+	assert.Equal(t, int(ballSpeedStart*ballSpeedGain), s.st.TopSpeed)
+	assert.Less(t, math.Hypot(s.ballVX, s.ballVY), s.speed)
+}

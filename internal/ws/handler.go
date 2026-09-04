@@ -29,6 +29,7 @@ const (
 	localsAnonKey         = "ws.anon"
 	sessionRecheckEvery   = 5 * time.Minute
 	maxReportedRTTMS      = 5000
+	reportedRTTSlackMS    = 100
 	readDeadline          = 90 * time.Second
 	membershipCheckLimit  = 3 * time.Second
 
@@ -234,6 +235,8 @@ func Handler(hub *Hub, sessionMgr *session.Manager, banChecker BanChecker, roomL
 		lastRecheck := time.Now()
 
 		conn.SetPongHandler(func(string) error {
+			client.RecordPong()
+
 			if token != "" && time.Since(lastRecheck) >= sessionRecheckEvery {
 				lastRecheck = time.Now()
 				if err := stillAuthorised(sessionMgr, banChecker, token, userID); err != nil {
@@ -408,6 +411,19 @@ func parsePing(raw json.RawMessage) pingData {
 	return in
 }
 
+func boundReportedRTT(reported int, measured int64) int {
+	if measured <= 0 {
+		return reported
+	}
+
+	ceiling := int(measured)*2 + reportedRTTSlackMS
+	if reported > ceiling {
+		return ceiling
+	}
+
+	return reported
+}
+
 func replyPong(client *Client, in pingData) {
 	data, err := json.Marshal(Message{Type: "pong", Data: pingData{Nonce: in.Nonce}})
 	if err != nil {
@@ -548,8 +564,9 @@ func handleWSMessage(client *Client, msg incomingMessage, hub *Hub, memberChecke
 		in := parsePing(msg.Data)
 		replyPong(client, in)
 
-		if gamePresence != nil && in.RTT > 0 {
-			gamePresence.HandleClientPing(userID, in.RTT)
+		rtt := boundReportedRTT(in.RTT, client.MeasuredRTT())
+		if gamePresence != nil && rtt > 0 {
+			gamePresence.HandleClientPing(userID, rtt)
 		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"runtime/pprof"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gofiber/contrib/v3/websocket"
@@ -32,6 +33,8 @@ type (
 		send      chan []byte
 		closeCh   chan any
 		closeOnce sync.Once
+		pingAt    atomic.Int64
+		rttPeak   atomic.Int64
 	}
 
 	viewerInfo struct {
@@ -69,6 +72,30 @@ func NewClient(userID uuid.UUID, conn *websocket.Conn) *Client {
 	}
 }
 
+func (c *Client) RecordPong() {
+	sent := c.pingAt.Swap(0)
+	if sent == 0 {
+		return
+	}
+
+	sample := time.Since(time.Unix(0, sent)).Milliseconds()
+	if sample < 0 {
+		return
+	}
+
+	peak := c.rttPeak.Load()
+	if peak <= 0 || sample >= peak {
+		c.rttPeak.Store(sample)
+		return
+	}
+
+	c.rttPeak.Store(peak - (peak-sample)/5)
+}
+
+func (c *Client) MeasuredRTT() int64 {
+	return c.rttPeak.Load()
+}
+
 // Start launches the writer goroutine. Call once per client.
 func (c *Client) Start() {
 	if c.Conn == nil {
@@ -98,6 +125,7 @@ func (c *Client) writeLoop() {
 			}
 		case <-pingTicker.C:
 			_ = c.Conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+			c.pingAt.Store(time.Now().UnixNano())
 			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
@@ -107,8 +135,6 @@ func (c *Client) writeLoop() {
 	}
 }
 
-// enqueue tries to push data onto the send channel without blocking.
-// Returns false if the buffer is full (slow consumer); caller should drop the client.
 func (c *Client) enqueue(data []byte) bool {
 	select {
 	case c.send <- data:

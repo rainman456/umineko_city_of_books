@@ -30,6 +30,7 @@ type (
 		target    [2]float64
 		ackSeq    [2]int
 		ping      [2]int
+		pingEMA   [2]float64
 		connected [2]bool
 		events    int
 		phaseTick int
@@ -157,8 +158,50 @@ func (s *sim) countDownToServe() {
 	s.ballVX = float64(s.st.ServeVX)
 	s.ballVY = float64(s.st.ServeVY)
 	s.speed = ballSpeedStart
+
+	s.applyLatencyScale(s.st.ServeToSlot)
+
 	s.st.Phase = phaseRally
 	s.events |= eventServe
+}
+
+func (s *sim) latencyScale(receiver int) float64 {
+	if receiver < 0 || receiver > 1 {
+		return 1
+	}
+
+	if !s.connected[0] || !s.connected[1] {
+		return 1
+	}
+
+	if s.pingEMA[0] <= 0 || s.pingEMA[1] <= 0 {
+		return 1
+	}
+
+	vx := math.Abs(s.ballVX)
+	if vx <= 0 {
+		return 1
+	}
+
+	adjust := clamp((s.pingEMA[receiver]-s.pingEMA[1-receiver])/2, -maxLatencyCompMS, maxLatencyCompMS)
+
+	base := crossDistance / vx * 1000
+	target := base + adjust
+	if target <= 0 {
+		return 1
+	}
+
+	return clamp(base/target, minLegScale, maxLegScale)
+}
+
+func (s *sim) applyLatencyScale(receiver int) {
+	scale := s.latencyScale(receiver)
+	if scale == 1 {
+		return
+	}
+
+	s.ballVX *= scale
+	s.ballVY *= scale
 }
 
 func (s *sim) sweepPaddles(prevX, prevY, dt float64) {
@@ -244,6 +287,8 @@ func (s *sim) bounce(slot int, contactY float64) {
 
 	s.ballVX = dir * s.speed * math.Cos(angle)
 	s.ballVY = s.speed * math.Sin(angle)
+
+	s.applyLatencyScale(1 - slot)
 
 	if int(s.speed) > s.st.TopSpeed {
 		s.st.TopSpeed = int(s.speed)
@@ -363,6 +408,7 @@ func (s *sim) SetConnected(slot int, connected bool) {
 
 	if !connected {
 		s.ping[slot] = 0
+		s.pingEMA[slot] = 0
 	}
 }
 
@@ -375,6 +421,13 @@ func (s *sim) SetPing(slot int, rttMS int) {
 	defer s.mu.Unlock()
 
 	s.ping[slot] = rttMS
+
+	if s.pingEMA[slot] <= 0 {
+		s.pingEMA[slot] = float64(rttMS)
+		return
+	}
+
+	s.pingEMA[slot] += (float64(rttMS) - s.pingEMA[slot]) * pingSmoothAlpha
 }
 
 func (s *sim) Snapshot() any {
