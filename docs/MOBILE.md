@@ -2,7 +2,7 @@
 
 Everything specific to the packaged native build: local iteration against a dev server, over-the-air bundles, the API base URL baked in at build time, and native push.
 
-The same React frontend is packaged as a native iOS/Android app via [Capacitor](https://capacitorjs.com/). The Capacitor project lives in `frontend/` (config in `frontend/capacitor.config.ts`, generated native project in `frontend/android/`).
+The same React frontend is packaged as a native iOS/Android app via [Capacitor](https://capacitorjs.com/). The Capacitor project lives in `frontend/` (config in `frontend/capacitor.config.json`, generated native project in `frontend/android/`).
 
 ```bash
 cd frontend
@@ -28,7 +28,7 @@ Both `npm run dev` (Vite on `:5173`) and the Go backend (`:4323`) need to be run
 
 ## Over-the-air bundles
 
-The app ships `@capgo/capacitor-updater` with `autoUpdate` turned off and end-to-end bundle signing turned on. `npm run build:ota` zips `dist-app/` with the Capgo CLI, encrypts it with the private signing key, and writes `../static/app-bundles/<VITE_APP_VERSION>.zip` plus a `latest.json` manifest carrying the RSA-encrypted checksum and the AES session key; the Go server serves both from the embedded static bundle like any other asset. The matching public key is committed in `frontend/capacitor.config.ts` and compiled into the APK by `cap sync`, so a device only accepts a bundle that was produced with the private key, whatever the origin or edge serves. On the client, `frontend/src/utils/appUpdate.ts` fetches `/app-bundles/latest.json` on launch and on resume, refuses a manifest without `checksum` and `session_key`, downloads a newer version in the background, and stages it for the next start rather than swapping under the user.
+The app ships `@capgo/capacitor-updater` with `autoUpdate` turned off and end-to-end bundle signing turned on. `npm run build:ota` zips `dist-app/` with the Capgo CLI, encrypts it with the private signing key, and writes `../static/app-bundles/<VITE_APP_VERSION>.zip` plus a `latest.json` manifest carrying the RSA-encrypted checksum and the AES session key; the Go server serves both from the embedded static bundle like any other asset. The matching public key is committed in `frontend/capacitor.config.json` and compiled into the APK by `cap sync`, so a device only accepts a bundle that was produced with the private key, whatever the origin or edge serves. On the client, `frontend/src/utils/appUpdate.ts` fetches `/app-bundles/latest.json` on launch and on resume, refuses a manifest without `checksum` and `session_key`, downloads a newer version in the background, and stages it for the next start rather than swapping under the user.
 
 The private key is never in the repo. `make-ota` reads it from `CAPGO_PRIVATE_KEY_FILE` (default `/run/secrets/capgo_private_key`); `Dockerfile.ci` mounts it as a BuildKit secret that `deploy.yml` fills from the `CAPGO_PRIVATE_KEY` repository secret, and that mount is `required=true`, so a CI build without the key fails rather than shipping unsigned. The plain `Dockerfile` mounts the same secret optionally: without it `make-ota` logs a warning and writes no bundle at all, so a local image simply offers no OTA update. To sign locally, point `CAPGO_PRIVATE_KEY_FILE` at your copy of `.capgo_key_v2`. Rotating the key means a new APK for everyone, because devices on the old public key cannot verify bundles signed with the new one.
 

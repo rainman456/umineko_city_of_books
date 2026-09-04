@@ -878,7 +878,8 @@ The frontend, rooted at `frontend/`. Every directory below `src/` carries the la
   oxlint.config.ts      the base config, which spreads layerRules last
   oxlint-plugin-layers.mjs  the five esquery rules the layer blocks switch on and off
   .oxfmtrc.json         the formatter settings, migrated from .prettierrc
-  capacitor.config.ts   the Android wrapper's app id, web dir, plugins and dev server override
+  capacitor.config.json the Android wrapper's app id, web dir and plugins; the dev server
+                        override is injected by scripts/cap-local.mjs
   scripts/              build-time helpers: the OTA bundle, test:names, the local Capacitor run
   android/              the generated Capacitor project, kept in the repository
 

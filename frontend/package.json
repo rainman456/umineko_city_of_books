@@ -33,7 +33,7 @@
         "@capacitor/push-notifications": "^8.1.2",
         "@capacitor/splash-screen": "^8.0.2",
         "@capacitor/status-bar": "^8.0.3",
-        "@capgo/capacitor-updater": "^8.51.3",
+        "@capgo/capacitor-updater": "^8.51.15",
         "@hyperbeam/web": "^0.0.38",
         "@livekit/components-react": "^2.9.24",
         "@marsidev/react-turnstile": "^1.6.1",
@@ -57,7 +57,7 @@
         "react": "^19.2.8",
         "react-chessboard": "^5.12.1",
         "react-dom": "^19.2.8",
-        "react-router": "^8.3.0"
+        "react-router": "^8.3.1"
     },
     "devDependencies": {
         "@capgo/cli": "^8.36.0",
@@ -67,7 +67,7 @@
         "@testing-library/user-event": "^14.6.3",
         "@types/react": "^19.2.18",
         "@types/react-dom": "^19.2.4",
-        "@vitejs/plugin-react": "^6.0.5",
+        "@vitejs/plugin-react": "^6.1.1",
         "@vitest/coverage-v8": "^4.1.11",
         "jsdom": "^30.0.1",
         "oxfmt": "^0.65.0",

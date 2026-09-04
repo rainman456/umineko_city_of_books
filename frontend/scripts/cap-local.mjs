@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const DEFAULT_HOST = "10.0.2.2";
@@ -17,10 +17,18 @@ if (!existsSync(resolve("dist-app"))) {
 console.log(`\nSyncing android for live-reload against: ${url}`);
 console.log("Reminder: `npm run dev` (Vite :5173) and the backend (:4323) must be running.\n");
 
-execSync("npx cap sync android", {
-    stdio: "inherit",
-    env: { ...process.env, CAP_SERVER_URL: url },
-});
+const configPath = resolve("capacitor.config.json");
+const pristine = readFileSync(configPath, "utf8");
+
+try {
+    const config = JSON.parse(pristine);
+    config.server = { url, cleartext: true };
+    writeFileSync(configPath, `${JSON.stringify(config, null, 4)}\n`);
+
+    execSync("npx cap sync android", { stdio: "inherit" });
+} finally {
+    writeFileSync(configPath, pristine);
+}
 
 console.log("\nDone. Run the app from IntelliJ.");
 console.log("Emulator uses 10.0.2.2 (default). For a physical device pass your PC's LAN IP:");
