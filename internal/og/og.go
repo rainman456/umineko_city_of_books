@@ -1000,7 +1000,32 @@ func (r *Resolver) liveStreamMetaByUsername(ctx context.Context, username string
 		return nil
 	}
 
-	return r.liveStreamMeta(ctx, stream)
+	if meta := r.liveStreamMeta(ctx, stream); meta != nil {
+		return meta
+	}
+
+	return r.offlineStreamMeta(ctx, username)
+}
+
+func (r *Resolver) offlineStreamMeta(ctx context.Context, username string) *Meta {
+	u, _, err := r.userRepo.GetProfileByUsername(ctx, username)
+	if err != nil || u == nil {
+		return nil
+	}
+
+	siteName, _ := r.getSiteMeta(ctx)
+	name := u.DisplayLabel()
+
+	meta := &Meta{
+		Title:       fmt.Sprintf("%s is not live right now", name),
+		Description: truncateDesc(fmt.Sprintf("%s's stream page on %s. This address stays the same, so open it whenever you want to see if they are on air.", name, siteName)),
+		URL:         fmt.Sprintf("%s/%s/live", r.baseURL, u.Username),
+	}
+	if u.AvatarURL != "" {
+		meta.Image = r.absoluteURL(u.AvatarURL)
+	}
+
+	return meta
 }
 
 func (r *Resolver) liveStreamMeta(ctx context.Context, stream *repository.LiveStreamRow) *Meta {

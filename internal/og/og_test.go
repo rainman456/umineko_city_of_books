@@ -348,13 +348,6 @@ func TestResolver_Resolve_LiveStreamByUsername(t *testing.T) {
 			wantTitle: "Ciconia blind run - Featherine's live stream",
 			wantURL:   "https://example.com/Featherine/live",
 		},
-		{
-			name:      "an offline streamer gets the default shell",
-			path:      "/Featherine/live",
-			row:       nil,
-			wantTitle: "When They Cry City of Books",
-			wantURL:   "https://example.com/",
-		},
 	}
 
 	for _, tc := range tests {
@@ -378,6 +371,76 @@ func TestResolver_Resolve_LiveStreamByUsername(t *testing.T) {
 			assert.Contains(t, html, `property="og:url" content="`+tc.wantURL+`"`)
 		})
 	}
+}
+
+func TestResolver_Resolve_OfflineStreamerStillGetsTheirOwnCard(t *testing.T) {
+	tests := []struct {
+		name      string
+		user      *model.User
+		wantTitle string
+		wantImage string
+	}{
+		{
+			name:      "an offline streamer is named, with their avatar converted for crawlers",
+			user:      &model.User{Username: "Featherine", DisplayName: "Featherine", AvatarURL: "/uploads/avatars/f.webp"},
+			wantTitle: "Featherine is not live right now",
+			wantImage: "https://example.com/og-image/avatars/f.jpg",
+		},
+		{
+			name:      "an offline streamer with no avatar keeps the site default image",
+			user:      &model.User{Username: "Featherine", DisplayName: "Featherine"},
+			wantTitle: "Featherine is not live right now",
+			wantImage: "https://example.com/Featherine.jpg",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// given a streamer who is not broadcasting
+			ss := settings.NewMockService(t)
+			ss.EXPECT().Get(mock.Anything, config.SettingOGDefaultImage).Return("")
+			ss.EXPECT().Get(mock.Anything, config.SettingSiteName).Return("")
+			ss.EXPECT().Get(mock.Anything, config.SettingSiteDescription).Return("")
+
+			streamRepo := repository.NewMockLiveStreamRepository(t)
+			streamRepo.EXPECT().GetActiveByUsername(mock.Anything, "Featherine").Return(nil, nil)
+
+			userRepo := repository.NewMockUserRepository(t)
+			userRepo.EXPECT().GetProfileByUsername(mock.Anything, "Featherine").Return(tc.user, nil, nil)
+
+			r := &Resolver{settingsSvc: ss, liveStreamRepo: streamRepo, userRepo: userRepo, cache: cache.New(), baseHTML: testBaseHTML, baseURL: "https://example.com"}
+
+			// when a crawler unfurls the stable url
+			html := r.Resolve(context.Background(), "/Featherine/live", "")
+
+			// then the card is about the streamer, not the site
+			assert.Contains(t, html, `property="og:title" content="`+tc.wantTitle+`"`)
+			assert.Contains(t, html, `property="og:url" content="https://example.com/Featherine/live"`)
+			assert.Contains(t, html, `property="og:image" content="`+tc.wantImage+`"`)
+		})
+	}
+}
+
+func TestResolver_Resolve_UnknownStreamerFallsBackToTheSiteCard(t *testing.T) {
+	// given a name that belongs to nobody
+	ss := settings.NewMockService(t)
+	ss.EXPECT().Get(mock.Anything, config.SettingOGDefaultImage).Return("")
+	ss.EXPECT().Get(mock.Anything, config.SettingSiteName).Return("")
+	ss.EXPECT().Get(mock.Anything, config.SettingSiteDescription).Return("")
+
+	streamRepo := repository.NewMockLiveStreamRepository(t)
+	streamRepo.EXPECT().GetActiveByUsername(mock.Anything, "nobody").Return(nil, nil)
+
+	userRepo := repository.NewMockUserRepository(t)
+	userRepo.EXPECT().GetProfileByUsername(mock.Anything, "nobody").Return(nil, nil, nil)
+
+	r := &Resolver{settingsSvc: ss, liveStreamRepo: streamRepo, userRepo: userRepo, cache: cache.New(), baseHTML: testBaseHTML, baseURL: "https://example.com"}
+
+	// when
+	html := r.Resolve(context.Background(), "/nobody/live", "")
+
+	// then there is nothing to say, so the generic card stands
+	assert.Contains(t, html, `property="og:title" content="When They Cry City of Books"`)
 }
 
 func TestResolver_Resolve_RetiredStreamURLHasNoCard(t *testing.T) {
