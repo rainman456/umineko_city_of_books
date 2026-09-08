@@ -5,170 +5,192 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"umineko_city_of_books/internal/repository"
+	"umineko_city_of_books/internal/dao/sqlcgen"
+	"umineko_city_of_books/internal/model"
+	"umineko_city_of_books/internal/model/spec"
 )
 
 type (
+	LiveStreamDAO interface {
+		Create(ctx context.Context, s spec.NewLiveStream, tx ...*sql.Tx) (*model.LiveStreamRow, error)
+		GetByID(ctx context.Context, id uuid.UUID, tx ...*sql.Tx) (*model.LiveStreamRow, error)
+		GetByRoom(ctx context.Context, room string, tx ...*sql.Tx) (*model.LiveStreamRow, error)
+		GetActiveByUser(ctx context.Context, userID uuid.UUID, tx ...*sql.Tx) (*model.LiveStreamRow, error)
+		GetActiveByUsername(ctx context.Context, username string, tx ...*sql.Tx) (*model.LiveStreamRow, error)
+		ListLive(ctx context.Context, tx ...*sql.Tx) ([]model.LiveStreamRow, error)
+		ListStartingBefore(ctx context.Context, cutoff string, tx ...*sql.Tx) ([]model.LiveStreamRow, error)
+		CountActive(ctx context.Context, tx ...*sql.Tx) (int, error)
+		SetIngress(ctx context.Context, s spec.LiveStreamIngressUpdate, tx ...*sql.Tx) error
+		MarkLive(ctx context.Context, id uuid.UUID, tx ...*sql.Tx) error
+		MarkOffline(ctx context.Context, id uuid.UUID, tx ...*sql.Tx) (bool, error)
+		AdjustViewerCount(ctx context.Context, s spec.LiveStreamViewerAdjustment, tx ...*sql.Tx) (int, bool, error)
+		SetThumbnail(ctx context.Context, s spec.LiveStreamThumbnailUpdate, tx ...*sql.Tx) error
+		SetEgress(ctx context.Context, s spec.LiveStreamEgressUpdate, tx ...*sql.Tx) error
+		SetDefaultMode(ctx context.Context, s spec.LiveStreamDefaultModeUpdate, tx ...*sql.Tx) error
+		SetTitle(ctx context.Context, s spec.LiveStreamTitleUpdate, tx ...*sql.Tx) error
+	}
+
 	liveStreamDAO struct {
 		db *sql.DB
 	}
+
+	liveStreamJoinRow = sqlcgen.GetLiveStreamByIDRow
 )
 
-const liveStreamSelectColumns = `s.id, s.user_id, s.title, s.status, s.livekit_room, s.ingress_id,
-	s.whip_url, s.stream_key, s.viewer_count, s.started_at, s.ended_at, s.created_at, s.thumbnail_url,
-	s.egress_id, s.hls_playlist_url, s.default_mode,
-	u.username, u.display_name, u.avatar_url`
+var (
+	ErrLiveStreamCapacity     = errors.New("live stream capacity reached")
+	ErrLiveStreamActiveExists = errors.New("user already has an active live stream")
+)
 
-func scanLiveStreamRow(scan func(dest ...any) error) (*repository.LiveStreamRow, error) {
-	var s repository.LiveStreamRow
-	err := scan(&s.ID, &s.UserID, &s.Title, &s.Status, &s.LivekitRoom, &s.IngressID,
-		&s.WhipURL, &s.StreamKey, &s.ViewerCount, &s.StartedAt, &s.EndedAt, &s.CreatedAt, &s.ThumbnailURL,
-		&s.EgressID, &s.HLSPlaylistURL, &s.DefaultMode,
-		&s.Username, &s.DisplayName, &s.AvatarURL)
+func liveStreamNullTime(nt sql.NullTime) sql.NullString {
+	if !nt.Valid {
+		return sql.NullString{}
+	}
+
+	return sql.NullString{String: nt.Time.UTC().Format(time.RFC3339), Valid: true}
+}
+
+func toLiveStreamRow(row liveStreamJoinRow) model.LiveStreamRow {
+	return model.LiveStreamRow{
+		ID:             row.ID,
+		UserID:         row.UserID,
+		Title:          row.Title,
+		Status:         row.Status,
+		LivekitRoom:    row.LivekitRoom,
+		IngressID:      row.IngressID,
+		WhipURL:        row.WhipUrl,
+		StreamKey:      row.StreamKey,
+		ViewerCount:    int(row.ViewerCount),
+		StartedAt:      liveStreamNullTime(row.StartedAt),
+		EndedAt:        liveStreamNullTime(row.EndedAt),
+		CreatedAt:      row.CreatedAt.UTC().Format(time.RFC3339),
+		ThumbnailURL:   row.ThumbnailUrl,
+		EgressID:       row.EgressID,
+		HLSPlaylistURL: row.HlsPlaylistUrl,
+		DefaultMode:    string(row.DefaultMode),
+		Username:       row.Username,
+		DisplayName:    row.DisplayName,
+		AvatarURL:      row.AvatarUrl,
+	}
+}
+
+func (r *liveStreamDAO) Create(ctx context.Context, s spec.NewLiveStream, tx ...*sql.Tx) (*model.LiveStreamRow, error) {
+	created, err := genQueries(r.db, tx).CreateLiveStream(ctx, sqlcgen.CreateLiveStreamParams{
+		UserID:        s.UserID,
+		Title:         s.Title,
+		MaxConcurrent: int32(s.MaxConcurrent),
+	})
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
+		return nil, ErrLiveStreamActiveExists
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrLiveStreamCapacity
+	}
+	if err != nil {
+		return nil, fmt.Errorf("create live stream: %w", err)
+	}
+
+	return new(toLiveStreamRow(liveStreamJoinRow(created))), nil
+}
+
+func (r *liveStreamDAO) GetByID(ctx context.Context, id uuid.UUID, tx ...*sql.Tx) (*model.LiveStreamRow, error) {
+	row, err := genQueries(r.db, tx).GetLiveStreamByID(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("scan live stream: %w", err)
+		return nil, fmt.Errorf("get live stream: %w", err)
 	}
 
-	return &s, nil
+	return new(toLiveStreamRow(row)), nil
 }
 
-func (r *liveStreamDAO) Create(ctx context.Context, userID uuid.UUID, title string, maxConcurrent int, tx ...*sql.Tx) (*repository.LiveStreamRow, error) {
-	row := txOrDB(r.db, tx).QueryRowContext(ctx,
-		`WITH ins AS (
-		     INSERT INTO live_streams (user_id, title, status)
-		     SELECT $1, $2, 'starting'
-		     WHERE (SELECT COUNT(*) FROM live_streams WHERE status <> 'offline') < $3
-		     RETURNING *
-		 )
-		 SELECT `+liveStreamSelectColumns+`
-		   FROM ins s
-		   JOIN users u ON u.id = s.user_id`,
-		userID, title, maxConcurrent,
-	)
-
-	stream, err := scanLiveStreamRow(row.Scan)
-	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
-		return nil, repository.ErrLiveStreamActiveExists
+func (r *liveStreamDAO) GetByRoom(ctx context.Context, room string, tx ...*sql.Tx) (*model.LiveStreamRow, error) {
+	row, err := genQueries(r.db, tx).GetLiveStreamByRoom(ctx, room)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
 	}
 	if err != nil {
-		return nil, err
-	}
-	if stream == nil {
-		return nil, repository.ErrLiveStreamCapacity
+		return nil, fmt.Errorf("get live stream by room: %w", err)
 	}
 
-	return stream, nil
+	return new(toLiveStreamRow(liveStreamJoinRow(row))), nil
 }
 
-func (r *liveStreamDAO) GetByID(ctx context.Context, id uuid.UUID, tx ...*sql.Tx) (*repository.LiveStreamRow, error) {
-	row := txOrDB(r.db, tx).QueryRowContext(ctx,
-		`SELECT `+liveStreamSelectColumns+`
-		   FROM live_streams s
-		   JOIN users u ON u.id = s.user_id
-		  WHERE s.id = $1`,
-		id,
-	)
+func (r *liveStreamDAO) GetActiveByUser(ctx context.Context, userID uuid.UUID, tx ...*sql.Tx) (*model.LiveStreamRow, error) {
+	row, err := genQueries(r.db, tx).GetActiveLiveStreamByUser(ctx, userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get active live stream by user: %w", err)
+	}
 
-	return scanLiveStreamRow(row.Scan)
+	return new(toLiveStreamRow(liveStreamJoinRow(row))), nil
 }
 
-func (r *liveStreamDAO) GetByRoom(ctx context.Context, room string, tx ...*sql.Tx) (*repository.LiveStreamRow, error) {
-	row := txOrDB(r.db, tx).QueryRowContext(ctx,
-		`SELECT `+liveStreamSelectColumns+`
-		   FROM live_streams s
-		   JOIN users u ON u.id = s.user_id
-		  WHERE s.livekit_room = $1`,
-		room,
-	)
+func (r *liveStreamDAO) GetActiveByUsername(ctx context.Context, username string, tx ...*sql.Tx) (*model.LiveStreamRow, error) {
+	row, err := genQueries(r.db, tx).GetActiveLiveStreamByUsername(ctx, username)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get active live stream by username: %w", err)
+	}
 
-	return scanLiveStreamRow(row.Scan)
+	return new(toLiveStreamRow(liveStreamJoinRow(row))), nil
 }
 
-func (r *liveStreamDAO) GetActiveByUser(ctx context.Context, userID uuid.UUID, tx ...*sql.Tx) (*repository.LiveStreamRow, error) {
-	row := txOrDB(r.db, tx).QueryRowContext(ctx,
-		`SELECT `+liveStreamSelectColumns+`
-		   FROM live_streams s
-		   JOIN users u ON u.id = s.user_id
-		  WHERE s.user_id = $1 AND s.status <> 'offline'
-		  LIMIT 1`,
-		userID,
-	)
-
-	return scanLiveStreamRow(row.Scan)
-}
-
-func (r *liveStreamDAO) GetActiveByUsername(ctx context.Context, username string, tx ...*sql.Tx) (*repository.LiveStreamRow, error) {
-	row := txOrDB(r.db, tx).QueryRowContext(ctx,
-		`SELECT `+liveStreamSelectColumns+`
-		   FROM live_streams s
-		   JOIN users u ON u.id = s.user_id
-		  WHERE LOWER(u.username) = LOWER($1) AND s.status <> 'offline'
-		  LIMIT 1`,
-		username,
-	)
-
-	return scanLiveStreamRow(row.Scan)
-}
-
-func (r *liveStreamDAO) listBy(ctx context.Context, tx []*sql.Tx, where string, args ...any) ([]repository.LiveStreamRow, error) {
-	rows, err := txOrDB(r.db, tx).QueryContext(ctx,
-		`SELECT `+liveStreamSelectColumns+`
-		   FROM live_streams s
-		   JOIN users u ON u.id = s.user_id
-		  WHERE `+where,
-		args...,
-	)
+func (r *liveStreamDAO) ListLive(ctx context.Context, tx ...*sql.Tx) ([]model.LiveStreamRow, error) {
+	rows, err := genQueries(r.db, tx).ListLiveStreamsLive(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list live streams: %w", err)
 	}
-	defer rows.Close()
 
-	var result []repository.LiveStreamRow
-	for rows.Next() {
-		parsed, scanErr := scanLiveStreamRow(rows.Scan)
-		if scanErr != nil {
-			return nil, scanErr
-		}
-		result = append(result, *parsed)
+	var result []model.LiveStreamRow
+	for _, row := range rows {
+		result = append(result, toLiveStreamRow(liveStreamJoinRow(row)))
 	}
 
-	return result, rows.Err()
+	return result, nil
 }
 
-func (r *liveStreamDAO) ListLive(ctx context.Context, tx ...*sql.Tx) ([]repository.LiveStreamRow, error) {
-	return r.listBy(ctx, tx, "s.status = 'live' ORDER BY s.started_at DESC")
-}
+func (r *liveStreamDAO) ListStartingBefore(ctx context.Context, cutoff string, tx ...*sql.Tx) ([]model.LiveStreamRow, error) {
+	rows, err := genQueries(r.db, tx).ListLiveStreamsStartingBefore(ctx, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("list live streams: %w", err)
+	}
 
-func (r *liveStreamDAO) ListStartingBefore(ctx context.Context, cutoff string, tx ...*sql.Tx) ([]repository.LiveStreamRow, error) {
-	return r.listBy(ctx, tx, "s.status = 'starting' AND s.created_at < $1::timestamptz", cutoff)
+	var result []model.LiveStreamRow
+	for _, row := range rows {
+		result = append(result, toLiveStreamRow(liveStreamJoinRow(row)))
+	}
+
+	return result, nil
 }
 
 func (r *liveStreamDAO) CountActive(ctx context.Context, tx ...*sql.Tx) (int, error) {
-	var n int
-	err := txOrDB(r.db, tx).QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM live_streams WHERE status <> 'offline'`,
-	).Scan(&n)
+	n, err := genQueries(r.db, tx).CountActiveLiveStreams(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("count active live streams: %w", err)
 	}
 
-	return n, nil
+	return int(n), nil
 }
 
-func (r *liveStreamDAO) SetIngress(ctx context.Context, spec repository.LiveStreamIngressUpdate, tx ...*sql.Tx) error {
-	_, err := txOrDB(r.db, tx).ExecContext(ctx,
-		`UPDATE live_streams
-		    SET ingress_id = $2, livekit_room = $3, whip_url = $4, stream_key = $5
-		  WHERE id = $1`,
-		spec.ID, spec.IngressID, spec.Room, spec.WhipURL, spec.StreamKey,
-	)
+func (r *liveStreamDAO) SetIngress(ctx context.Context, s spec.LiveStreamIngressUpdate, tx ...*sql.Tx) error {
+	err := genQueries(r.db, tx).SetLiveStreamIngress(ctx, sqlcgen.SetLiveStreamIngressParams{
+		ID:          s.ID,
+		IngressID:   s.IngressID,
+		LivekitRoom: s.Room,
+		WhipUrl:     s.WhipURL,
+		StreamKey:   s.StreamKey,
+	})
 	if err != nil {
 		return fmt.Errorf("set live stream ingress: %w", err)
 	}
@@ -177,13 +199,7 @@ func (r *liveStreamDAO) SetIngress(ctx context.Context, spec repository.LiveStre
 }
 
 func (r *liveStreamDAO) MarkLive(ctx context.Context, id uuid.UUID, tx ...*sql.Tx) error {
-	_, err := txOrDB(r.db, tx).ExecContext(ctx,
-		`UPDATE live_streams
-		    SET status = 'live', started_at = COALESCE(started_at, NOW())
-		  WHERE id = $1 AND status <> 'offline'`,
-		id,
-	)
-	if err != nil {
+	if err := genQueries(r.db, tx).MarkLiveStreamLive(ctx, id); err != nil {
 		return fmt.Errorf("mark live stream live: %w", err)
 	}
 
@@ -191,33 +207,19 @@ func (r *liveStreamDAO) MarkLive(ctx context.Context, id uuid.UUID, tx ...*sql.T
 }
 
 func (r *liveStreamDAO) MarkOffline(ctx context.Context, id uuid.UUID, tx ...*sql.Tx) (bool, error) {
-	res, err := txOrDB(r.db, tx).ExecContext(ctx,
-		`UPDATE live_streams
-		    SET status = 'offline', ended_at = NOW(), viewer_count = 0
-		  WHERE id = $1 AND status <> 'offline'`,
-		id,
-	)
+	affected, err := genQueries(r.db, tx).MarkLiveStreamOffline(ctx, id)
 	if err != nil {
 		return false, fmt.Errorf("mark live stream offline: %w", err)
-	}
-
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("mark live stream offline rows: %w", err)
 	}
 
 	return affected > 0, nil
 }
 
-func (r *liveStreamDAO) AdjustViewerCount(ctx context.Context, id uuid.UUID, delta int, tx ...*sql.Tx) (int, bool, error) {
-	var count int
-	err := txOrDB(r.db, tx).QueryRowContext(ctx,
-		`UPDATE live_streams
-		    SET viewer_count = GREATEST(0, viewer_count + $2)
-		  WHERE id = $1 AND status = 'live'
-		  RETURNING viewer_count`,
-		id, delta,
-	).Scan(&count)
+func (r *liveStreamDAO) AdjustViewerCount(ctx context.Context, s spec.LiveStreamViewerAdjustment, tx ...*sql.Tx) (int, bool, error) {
+	count, err := genQueries(r.db, tx).AdjustLiveStreamViewerCount(ctx, sqlcgen.AdjustLiveStreamViewerCountParams{
+		Delta: int32(s.Delta),
+		ID:    s.ID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, nil
 	}
@@ -225,14 +227,14 @@ func (r *liveStreamDAO) AdjustViewerCount(ctx context.Context, id uuid.UUID, del
 		return 0, false, fmt.Errorf("adjust live stream viewer count: %w", err)
 	}
 
-	return count, true, nil
+	return int(count), true, nil
 }
 
-func (r *liveStreamDAO) SetThumbnail(ctx context.Context, id uuid.UUID, url string, tx ...*sql.Tx) error {
-	_, err := txOrDB(r.db, tx).ExecContext(ctx,
-		`UPDATE live_streams SET thumbnail_url = $2 WHERE id = $1`,
-		id, url,
-	)
+func (r *liveStreamDAO) SetThumbnail(ctx context.Context, s spec.LiveStreamThumbnailUpdate, tx ...*sql.Tx) error {
+	err := genQueries(r.db, tx).SetLiveStreamThumbnail(ctx, sqlcgen.SetLiveStreamThumbnailParams{
+		ID:           s.ID,
+		ThumbnailUrl: s.URL,
+	})
 	if err != nil {
 		return fmt.Errorf("set live stream thumbnail: %w", err)
 	}
@@ -240,11 +242,12 @@ func (r *liveStreamDAO) SetThumbnail(ctx context.Context, id uuid.UUID, url stri
 	return nil
 }
 
-func (r *liveStreamDAO) SetEgress(ctx context.Context, id uuid.UUID, egressID, hlsURL string, tx ...*sql.Tx) error {
-	_, err := txOrDB(r.db, tx).ExecContext(ctx,
-		`UPDATE live_streams SET egress_id = $2, hls_playlist_url = $3 WHERE id = $1`,
-		id, egressID, hlsURL,
-	)
+func (r *liveStreamDAO) SetEgress(ctx context.Context, s spec.LiveStreamEgressUpdate, tx ...*sql.Tx) error {
+	err := genQueries(r.db, tx).SetLiveStreamEgress(ctx, sqlcgen.SetLiveStreamEgressParams{
+		ID:             s.ID,
+		EgressID:       s.EgressID,
+		HlsPlaylistUrl: s.HLSURL,
+	})
 	if err != nil {
 		return fmt.Errorf("set live stream egress: %w", err)
 	}
@@ -252,11 +255,11 @@ func (r *liveStreamDAO) SetEgress(ctx context.Context, id uuid.UUID, egressID, h
 	return nil
 }
 
-func (r *liveStreamDAO) SetDefaultMode(ctx context.Context, id uuid.UUID, mode string, tx ...*sql.Tx) error {
-	_, err := txOrDB(r.db, tx).ExecContext(ctx,
-		`UPDATE live_streams SET default_mode = $2 WHERE id = $1`,
-		id, mode,
-	)
+func (r *liveStreamDAO) SetDefaultMode(ctx context.Context, s spec.LiveStreamDefaultModeUpdate, tx ...*sql.Tx) error {
+	err := genQueries(r.db, tx).SetLiveStreamDefaultMode(ctx, sqlcgen.SetLiveStreamDefaultModeParams{
+		ID:          s.ID,
+		DefaultMode: sqlcgen.StreamDefaultMode(s.DefaultMode),
+	})
 	if err != nil {
 		return fmt.Errorf("set live stream default mode: %w", err)
 	}
@@ -264,11 +267,11 @@ func (r *liveStreamDAO) SetDefaultMode(ctx context.Context, id uuid.UUID, mode s
 	return nil
 }
 
-func (r *liveStreamDAO) SetTitle(ctx context.Context, id uuid.UUID, title string, tx ...*sql.Tx) error {
-	_, err := txOrDB(r.db, tx).ExecContext(ctx,
-		`UPDATE live_streams SET title = $2 WHERE id = $1`,
-		id, title,
-	)
+func (r *liveStreamDAO) SetTitle(ctx context.Context, s spec.LiveStreamTitleUpdate, tx ...*sql.Tx) error {
+	err := genQueries(r.db, tx).SetLiveStreamTitle(ctx, sqlcgen.SetLiveStreamTitleParams{
+		ID:    s.ID,
+		Title: s.Title,
+	})
 	if err != nil {
 		return fmt.Errorf("set live stream title: %w", err)
 	}

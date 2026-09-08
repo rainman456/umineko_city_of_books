@@ -7,49 +7,44 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"umineko_city_of_books/internal/dao/sqlcgen"
+	"umineko_city_of_books/internal/model/spec"
 )
 
 type (
+	SidebarLastVisitedDAO interface {
+		Upsert(ctx context.Context, s spec.NewSidebarVisit, tx ...*sql.Tx) error
+		ListForUser(ctx context.Context, userID uuid.UUID, tx ...*sql.Tx) (map[string]string, error)
+	}
+
 	sidebarLastVisitedDAO struct {
 		db *sql.DB
 	}
 )
 
-func (r *sidebarLastVisitedDAO) Upsert(ctx context.Context, userID uuid.UUID, key string, tx ...*sql.Tx) error {
-	_, err := txOrDB(r.db, tx).ExecContext(ctx,
-		`INSERT INTO sidebar_last_visited (user_id, key, visited_at)
-		 VALUES ($1, $2, NOW())
-		 ON CONFLICT (user_id, key) DO UPDATE SET visited_at = EXCLUDED.visited_at`,
-		userID, key,
-	)
+func (r *sidebarLastVisitedDAO) Upsert(ctx context.Context, s spec.NewSidebarVisit, tx ...*sql.Tx) error {
+	err := genQueries(r.db, tx).UpsertSidebarLastVisited(ctx, sqlcgen.UpsertSidebarLastVisitedParams{
+		UserID: s.UserID,
+		Key:    s.Key,
+	})
 	if err != nil {
 		return fmt.Errorf("upsert sidebar last visited: %w", err)
 	}
+
 	return nil
 }
 
 func (r *sidebarLastVisitedDAO) ListForUser(ctx context.Context, userID uuid.UUID, tx ...*sql.Tx) (map[string]string, error) {
-	rows, err := txOrDB(r.db, tx).QueryContext(ctx,
-		`SELECT key, visited_at FROM sidebar_last_visited WHERE user_id = $1`,
-		userID,
-	)
+	rows, err := genQueries(r.db, tx).ListSidebarLastVisitedForUser(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list sidebar last visited: %w", err)
 	}
-	defer rows.Close()
-	out := make(map[string]string)
-	for rows.Next() {
-		var (
-			key       string
-			visitedAt time.Time
-		)
-		if err := rows.Scan(&key, &visitedAt); err != nil {
-			return nil, fmt.Errorf("scan sidebar last visited: %w", err)
-		}
-		out[key] = visitedAt.UTC().Format(time.RFC3339)
+
+	out := make(map[string]string, len(rows))
+	for _, row := range rows {
+		out[row.Key] = row.VisitedAt.UTC().Format(time.RFC3339)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate sidebar last visited: %w", err)
-	}
+
 	return out, nil
 }

@@ -10,9 +10,21 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"umineko_city_of_books/internal/dao/sqlcgen"
+	"umineko_city_of_books/internal/model/spec"
 )
 
 type (
+	SessionDAO interface {
+		Create(ctx context.Context, s spec.NewSession, tx ...*sql.Tx) error
+		GetUserID(ctx context.Context, token string, tx ...*sql.Tx) (uuid.UUID, time.Time, error)
+		Delete(ctx context.Context, token string, tx ...*sql.Tx) error
+		DeleteAllForUser(ctx context.Context, userID uuid.UUID, tx ...*sql.Tx) error
+		DeleteAllForUserExcept(ctx context.Context, s spec.SessionDeletionExcept, tx ...*sql.Tx) error
+		CleanExpired(ctx context.Context, tx ...*sql.Tx) (int, error)
+	}
+
 	sessionDAO struct {
 		db *sql.DB
 	}
@@ -24,24 +36,21 @@ func hashSessionToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (r *sessionDAO) Create(ctx context.Context, token string, userID uuid.UUID, expiresAt time.Time, tx ...*sql.Tx) error {
-	_, err := txOrDB(r.db, tx).ExecContext(ctx,
-		`INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)`,
-		hashSessionToken(token), userID, expiresAt,
-	)
+func (r *sessionDAO) Create(ctx context.Context, s spec.NewSession, tx ...*sql.Tx) error {
+	err := genQueries(r.db, tx).CreateSession(ctx, sqlcgen.CreateSessionParams{
+		Token:     hashSessionToken(s.Token),
+		UserID:    s.UserID,
+		ExpiresAt: s.ExpiresAt,
+	})
 	if err != nil {
 		return fmt.Errorf("insert session: %w", err)
 	}
+
 	return nil
 }
 
 func (r *sessionDAO) GetUserID(ctx context.Context, token string, tx ...*sql.Tx) (uuid.UUID, time.Time, error) {
-	var userID uuid.UUID
-	var expiresAt time.Time
-
-	err := txOrDB(r.db, tx).QueryRowContext(ctx,
-		`SELECT user_id, expires_at FROM sessions WHERE token = $1`, hashSessionToken(token),
-	).Scan(&userID, &expiresAt)
+	row, err := genQueries(r.db, tx).GetSessionUserID(ctx, hashSessionToken(token))
 	if errors.Is(err, sql.ErrNoRows) {
 		return uuid.Nil, time.Time{}, fmt.Errorf("session not found")
 	}
@@ -49,33 +58,28 @@ func (r *sessionDAO) GetUserID(ctx context.Context, token string, tx ...*sql.Tx)
 		return uuid.Nil, time.Time{}, fmt.Errorf("query session: %w", err)
 	}
 
-	return userID, expiresAt, nil
+	return row.UserID, row.ExpiresAt, nil
 }
 
 func (r *sessionDAO) Delete(ctx context.Context, token string, tx ...*sql.Tx) error {
-	_, err := txOrDB(r.db, tx).ExecContext(ctx, `DELETE FROM sessions WHERE token = $1`, hashSessionToken(token))
-	return err
+	return genQueries(r.db, tx).DeleteSession(ctx, hashSessionToken(token))
 }
 
 func (r *sessionDAO) DeleteAllForUser(ctx context.Context, userID uuid.UUID, tx ...*sql.Tx) error {
-	_, err := txOrDB(r.db, tx).ExecContext(ctx, `DELETE FROM sessions WHERE user_id = $1`, userID)
-	return err
+	return genQueries(r.db, tx).DeleteSessionsForUser(ctx, userID)
 }
 
-func (r *sessionDAO) DeleteAllForUserExcept(ctx context.Context, userID uuid.UUID, keepToken string, tx ...*sql.Tx) error {
-	_, err := txOrDB(r.db, tx).ExecContext(ctx, `DELETE FROM sessions WHERE user_id = $1 AND token <> $2`, userID, hashSessionToken(keepToken))
-	return err
+func (r *sessionDAO) DeleteAllForUserExcept(ctx context.Context, s spec.SessionDeletionExcept, tx ...*sql.Tx) error {
+	return genQueries(r.db, tx).DeleteSessionsForUserExcept(ctx, sqlcgen.DeleteSessionsForUserExceptParams{
+		UserID: s.UserID,
+		Token:  hashSessionToken(s.KeepToken),
+	})
 }
 
 func (r *sessionDAO) CleanExpired(ctx context.Context, tx ...*sql.Tx) (int, error) {
-	res, err := txOrDB(r.db, tx).ExecContext(ctx, `DELETE FROM sessions WHERE expires_at < $1`, time.Now())
+	n, err := genQueries(r.db, tx).DeleteExpiredSessions(ctx, time.Now())
 	if err != nil {
 		return 0, fmt.Errorf("clean expired sessions: %w", err)
-	}
-
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("clean expired sessions rows affected: %w", err)
 	}
 
 	return int(n), nil
