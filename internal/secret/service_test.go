@@ -2,6 +2,7 @@ package secret
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sync"
 	"testing"
@@ -279,7 +280,15 @@ func TestCreateComment_MentionNotifiesTheNamedUser(t *testing.T) {
 	secretComments.EXPECT().
 		CreateComment(mock.Anything, spec.NewComment[string]{TargetID: "witchHunter", UserID: userID, Body: "look at this @alice"}).
 		Return(&model.CommentRow{ID: commentID}, nil)
-	secretRepo.EXPECT().GetCommenterIDs(mock.Anything, "witchHunter").Return(nil, nil)
+	var fanout sync.WaitGroup
+	fanout.Add(1)
+
+	secretRepo.EXPECT().GetCommenterIDs(mock.Anything, "witchHunter").
+		RunAndReturn(func(context.Context, string, ...*sql.Tx) ([]uuid.UUID, error) {
+			fanout.Done()
+
+			return nil, nil
+		})
 	userRepo.EXPECT().GetByID(mock.Anything, userID).Return(&model.User{ID: userID, DisplayName: "Battler"}, nil)
 	userRepo.EXPECT().GetByUsernames(mock.Anything, []string{"alice"}).Return([]model.User{{ID: mentionedID}}, nil)
 	blockSvc.EXPECT().IsBlockedEither(mock.Anything, userID, mentionedID).Return(false, nil)
@@ -302,6 +311,7 @@ func TestCreateComment_MentionNotifiesTheNamedUser(t *testing.T) {
 	// then
 	require.NoError(t, err)
 	wg.Wait()
+	fanout.Wait()
 	assert.Equal(t, dto.NotifMention, mentioned.Type)
 	assert.Equal(t, mentionedID, mentioned.RecipientID)
 	assert.Equal(t, uuid.Nil, mentioned.ReferenceID)
